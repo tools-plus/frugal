@@ -62,7 +62,8 @@ endpoint on the server — planned.
 # or "contexts": ["*"] for every context in `kubectl config get-contexts`.
 # (Running kubectl proxy manually + "clusters" api_url entries still works.)
 
-# AWS creds from your normal profile/env:
+# AWS creds from your normal profile/env (env vars AWS_REGION / AWS_PROFILE
+# always override values in the config file):
 export AWS_REGION=ap-south-1
 export AWS_PROFILE=myprofile   # or set "profile" in config.json
 go run ./cmd/awsobs

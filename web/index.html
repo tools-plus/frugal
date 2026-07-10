@@ -404,7 +404,7 @@ function treeRow(box, depth, opts) {
   const b = document.createElement("button");
   b.className = "res" + (opts.active ? " active" : "");
   b.style.paddingLeft = (10 + depth * 14) + "px";
-  const caret = opts.caret === undefined ? "" : `<span class="caret">${opts.caret ? "▾" : "▸"}</span>`;
+  const caret = `<span class="caret">${opts.caret === undefined ? "" : (opts.caret ? "▾" : "▸")}</span>`;
   b.innerHTML = `${caret}${opts.dot || ""}<span class="nm">${opts.label}</span>` +
     (opts.tag !== undefined ? `<span class="meta">${opts.tag}</span>` : "");
   b.onclick = opts.onclick;
@@ -440,7 +440,13 @@ function buildEKSNav() {
     treeRow(box, 0, {
       label: c, caret: open,
       active: k === selKey({t:"cp", cluster:c}),
-      onclick: () => { S.exp.add("c:" + c); select({t:"cp", cluster:c, view:"metrics"}); },
+      onclick: () => {
+        const wasOpen = S.exp.has("c:" + c);
+        const wasSel = k === selKey({t:"cp", cluster:c});
+        for (const e of [...S.exp]) if (e.startsWith("c:")) S.exp.delete(e);
+        if (!(wasOpen && wasSel)) S.exp.add("c:" + c);
+        select({t:"cp", cluster:c, view:"metrics"});
+      },
     });
     if (!open) continue;
     treeRow(box, 1, {
@@ -607,7 +613,10 @@ function renderMain() {
         const L = m.labels||{};
         return L.source === "cloudwatch" && L.namespace === "AWS/EKS" && L.resource === sel.cluster;
       }));
-      hint = "no AWS/EKS CloudWatch metrics for this cluster yet";
+      const cwEKS = [...new Set(metas.filter(m => (m.labels||{}).source === "cloudwatch" && m.labels.namespace === "AWS/EKS").map(m => m.labels.resource))].sort();
+      hint = 'no AWS/EKS CloudWatch metrics for "' + sel.cluster + '"' + String.fromCharCode(10) +
+        (cwEKS.length ? "CloudWatch reports clusters: " + cwEKS.join(", ")
+                      : "no AWS/EKS series at all - check the AWS collector region/profile in the server log");
     } else if (sel.t === "nodes") {
       const nm = metas.filter(m => {
         const L = m.labels||{};

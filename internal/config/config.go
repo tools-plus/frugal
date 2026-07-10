@@ -165,10 +165,12 @@ func Load(path string) (Config, error) {
 	if v := os.Getenv("AWSOBS_LISTEN"); v != "" {
 		cfg.Listen = v
 	}
-	if v := os.Getenv("AWS_REGION"); v != "" && cfg.AWS.Region == "" {
+	// Env overrides file — an explicitly exported AWS_REGION/AWS_PROFILE
+	// should always win over a copied example config.
+	if v := os.Getenv("AWS_REGION"); v != "" {
 		cfg.AWS.Region = v
 	}
-	if v := os.Getenv("AWS_PROFILE"); v != "" && cfg.AWS.Profile == "" {
+	if v := os.Getenv("AWS_PROFILE"); v != "" {
 		cfg.AWS.Profile = v
 	}
 	if v := os.Getenv("AWSOBS_K8S_API_URL"); v != "" {
