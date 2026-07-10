@@ -10,20 +10,27 @@ import (
 
 // PodInfo is the pod inventory row shown in the dashboard.
 type PodInfo struct {
-	Namespace  string   `json:"namespace"`
-	Name       string   `json:"name"`
-	Phase      string   `json:"phase"`
-	Node       string   `json:"node"`
-	Restarts   int      `json:"restarts"`
-	Containers []string `json:"containers"`
-	StartTime  string   `json:"startTime"`
+	Cluster      string   `json:"cluster"` // filled in by the server
+	Namespace    string   `json:"namespace"`
+	Name         string   `json:"name"`
+	Phase        string   `json:"phase"`
+	Node         string   `json:"node"`
+	Restarts     int      `json:"restarts"`
+	Containers   []string `json:"containers"`
+	StartTime    string   `json:"startTime"`
+	Workload     string   `json:"workload"`
+	WorkloadKind string   `json:"workloadKind"`
 }
 
 type podList struct {
 	Items []struct {
 		Metadata struct {
-			Name      string `json:"name"`
-			Namespace string `json:"namespace"`
+			Name            string `json:"name"`
+			Namespace       string `json:"namespace"`
+			OwnerReferences []struct {
+				Kind string `json:"kind"`
+				Name string `json:"name"`
+			} `json:"ownerReferences"`
 		} `json:"metadata"`
 		Spec struct {
 			NodeName   string `json:"nodeName"`
@@ -57,12 +64,15 @@ func (c *Client) ListPods(ctx context.Context, namespace string) ([]PodInfo, err
 	}
 	out := make([]PodInfo, 0, len(list.Items))
 	for _, p := range list.Items {
+		wl, kind := workloadOf(p.Metadata.OwnerReferences, p.Metadata.Name)
 		info := PodInfo{
-			Namespace: p.Metadata.Namespace,
-			Name:      p.Metadata.Name,
-			Phase:     p.Status.Phase,
-			Node:      p.Spec.NodeName,
-			StartTime: p.Status.StartTime,
+			Namespace:    p.Metadata.Namespace,
+			Name:         p.Metadata.Name,
+			Phase:        p.Status.Phase,
+			Node:         p.Spec.NodeName,
+			StartTime:    p.Status.StartTime,
+			Workload:     wl,
+			WorkloadKind: kind,
 		}
 		for _, cs := range p.Status.ContainerStatuses {
 			info.Restarts += cs.RestartCount
@@ -90,4 +100,36 @@ func (c *Client) StreamLogs(ctx context.Context, namespace, pod, container strin
 	path := "/api/v1/namespaces/" + url.PathEscape(namespace) +
 		"/pods/" + url.PathEscape(pod) + "/log?" + q.Encode()
 	return c.Stream(ctx, path)
+}
+
+type ownerRef struct{ Kind, Name string }
+
+// workloadOf resolves a pod to its owning workload. ReplicaSet-owned pods
+// roll up to their Deployment (strip the ReplicaSet hash suffix); other
+// controllers use their own name; bare pods stand alone.
+func workloadOf(owners []struct {
+	Kind string `json:"kind"`
+	Name string `json:"name"`
+}, podName string) (string, string) {
+	for _, o := range owners {
+		switch o.Kind {
+		case "ReplicaSet":
+			if i := lastDash(o.Name); i > 0 {
+				return o.Name[:i], "Deployment"
+			}
+			return o.Name, "ReplicaSet"
+		case "StatefulSet", "DaemonSet", "Job", "CronJob", "Rollout":
+			return o.Name, o.Kind
+		}
+	}
+	return podName, "Pod"
+}
+
+func lastDash(s string) int {
+	for i := len(s) - 1; i >= 0; i-- {
+		if s[i] == '-' {
+			return i
+		}
+	}
+	return -1
 }

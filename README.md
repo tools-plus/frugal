@@ -56,10 +56,13 @@ endpoint on the server — planned.
 ## Quick start (local, 2 minutes)
 
 ```bash
-# Terminal 1 — proxy your cluster API locally (zero-config k8s auth):
-kubectl proxy
+# Point config at your kubeconfig contexts — awsobs runs kubectl proxy for
+# you (one supervised child process per context, restarted if it dies):
+#   "kubernetes": { "contexts": ["plane-eks-dev", "plane-eks-atc"] }
+# or "contexts": ["*"] for every context in `kubectl config get-contexts`.
+# (Running kubectl proxy manually + "clusters" api_url entries still works.)
 
-# Terminal 2 — AWS creds from your normal profile/env:
+# AWS creds from your normal profile/env:
 export AWS_REGION=ap-south-1
 export AWS_PROFILE=myprofile   # or set "profile" in config.json
 go run ./cmd/awsobs
@@ -89,6 +92,13 @@ a bug.
 **EKS** — talks straight to the cluster APIs with a ~100-line REST client
 (no client-go):
 
+- multiple clusters at once — each gets its own API endpoint (a `kubectl
+  proxy` port locally, or in-cluster ServiceAccount when deployed inside);
+  every series is labeled with its cluster
+- the dashboard drills down: cluster → control plane / nodes / namespaces →
+  workloads (derived from pod ownerReferences: Deployments, StatefulSets,
+  DaemonSets, Jobs) → pods; selecting a workload overlays its pods' CPU and
+  memory on shared charts
 - pod + node CPU/memory: `metrics.k8s.io` (metrics-server, ~15s resolution)
 - pod inventory (phase, restarts, containers): core API
 - live log tails: `GET .../pods/{pod}/log?follow=true` — the same call

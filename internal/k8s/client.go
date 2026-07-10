@@ -32,7 +32,7 @@ type Client struct {
 //  2. in-cluster ServiceAccount (when running inside the EKS cluster),
 //  3. kubectl proxy at http://127.0.0.1:8001 (the zero-setup local dev path:
 //     run `kubectl proxy` in another terminal).
-func NewClient(cfg config.K8sConfig) (*Client, error) {
+func NewClient(cfg config.ClusterConfig) (*Client, error) {
 	tr := &http.Transport{TLSClientConfig: &tls.Config{}}
 	c := &Client{http: &http.Client{Transport: tr, Timeout: 0}}
 

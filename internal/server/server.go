@@ -28,19 +28,25 @@ type Historian interface {
 	History(ctx context.Context, id string, from, to time.Time) ([]store.Point, error)
 }
 
+// Cluster pairs a cluster name with its API client.
+type Cluster struct {
+	Name   string
+	Client *k8s.Client
+}
+
 type Server struct {
 	store       *store.Store
 	logs        *logstore.Store
-	k8s         *k8s.Client // nil when kubernetes collection is disabled
-	hist        Historian   // nil when the AWS collector is disabled
+	clusters    []Cluster // empty when kubernetes collection is disabled
+	hist        Historian // nil when the AWS collector is disabled
 	ingestToken string
 	logger      *log.Logger
 	assets      embed.FS
 	mux         *http.ServeMux
 }
 
-func New(st *store.Store, ls *logstore.Store, kc *k8s.Client, hist Historian, ingestToken string, assets embed.FS, logger *log.Logger) *Server {
-	s := &Server{store: st, logs: ls, k8s: kc, hist: hist, ingestToken: ingestToken, logger: logger, assets: assets}
+func New(st *store.Store, ls *logstore.Store, clusters []Cluster, hist Historian, ingestToken string, assets embed.FS, logger *log.Logger) *Server {
+	s := &Server{store: st, logs: ls, clusters: clusters, hist: hist, ingestToken: ingestToken, logger: logger, assets: assets}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", s.handleIndex)
 	mux.HandleFunc("GET /api/series", s.handleSeries)
@@ -122,18 +128,34 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, pts)
 }
 
-// GET /api/pods
+// GET /api/pods — merged inventory across all clusters.
 func (s *Server) handlePods(w http.ResponseWriter, r *http.Request) {
-	if s.k8s == nil {
-		writeJSON(w, []k8s.PodInfo{})
-		return
+	out := []k8s.PodInfo{}
+	for _, c := range s.clusters {
+		pods, err := c.Client.ListPods(r.Context(), r.URL.Query().Get("namespace"))
+		if err != nil {
+			s.logger.Printf("pods(%s): %v", c.Name, err)
+			continue
+		}
+		for i := range pods {
+			pods[i].Cluster = c.Name
+		}
+		out = append(out, pods...)
 	}
-	pods, err := s.k8s.ListPods(r.Context(), r.URL.Query().Get("namespace"))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
-		return
+	writeJSON(w, out)
+}
+
+// clusterFor returns the client for a named cluster (or the first one).
+func (s *Server) clusterFor(name string) *k8s.Client {
+	for _, c := range s.clusters {
+		if c.Name == name {
+			return c.Client
+		}
 	}
-	writeJSON(w, pods)
+	if len(s.clusters) > 0 && name == "" {
+		return s.clusters[0].Client
+	}
+	return nil
 }
 
 func sseHeaders(w http.ResponseWriter) (http.Flusher, bool) {
@@ -180,7 +202,8 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	ns, pod := q.Get("namespace"), q.Get("pod")
-	if s.k8s == nil {
+	kc := s.clusterFor(q.Get("cluster"))
+	if kc == nil {
 		// Fall back to logs shipped by the DaemonSet agent, if any.
 		r.URL.RawQuery = "source=" + url.QueryEscape("pod/"+ns+"/"+pod) + "&tail=" + q.Get("tail")
 		s.handleAgentLogs(w, r)
@@ -202,7 +225,7 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
-	body, err := s.k8s.StreamLogs(ctx, ns, pod, q.Get("container"), tail)
+	body, err := kc.StreamLogs(ctx, ns, pod, q.Get("container"), tail)
 	if err != nil {
 		fmt.Fprintf(w, "event: error\ndata: %s\n\n", jsonString(err.Error()))
 		fl.Flush()

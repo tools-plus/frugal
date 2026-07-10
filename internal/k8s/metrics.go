@@ -18,14 +18,17 @@ import (
 // EKS installs via the metrics-server addon) for live pod and node CPU and
 // memory usage.
 type Collector struct {
-	cfg    config.K8sConfig
-	client *Client
-	store  *store.Store
-	logger *log.Logger
+	cfg     config.K8sConfig
+	cluster string
+	client  *Client
+	store   *store.Store
+	logger  *log.Logger
+
+	wl map[string]PodInfo // "ns/pod" -> inventory (for workload labels)
 }
 
-func NewCollector(cfg config.K8sConfig, cl *Client, st *store.Store, logger *log.Logger) *Collector {
-	return &Collector{cfg: cfg, client: cl, store: st, logger: logger}
+func NewCollector(cfg config.K8sConfig, cluster string, cl *Client, st *store.Store, logger *log.Logger) *Collector {
+	return &Collector{cfg: cfg, cluster: cluster, client: cl, store: st, logger: logger, wl: map[string]PodInfo{}}
 }
 
 func (c *Collector) Run(ctx context.Context) {
@@ -75,6 +78,16 @@ type nodeMetricsList struct {
 }
 
 func (c *Collector) poll(ctx context.Context) {
+	// Refresh the pod inventory first so metric series get workload labels.
+	if pods, err := c.client.ListPods(ctx, ""); err == nil {
+		m := make(map[string]PodInfo, len(pods))
+		for _, p := range pods {
+			m[p.Namespace+"/"+p.Name] = p
+		}
+		c.wl = m
+	} else {
+		c.logger.Printf("k8s(%s): pod inventory: %v", c.cluster, err)
+	}
 	c.pollNodes(ctx)
 	c.pollPods(ctx)
 }
@@ -92,15 +105,17 @@ func (c *Collector) pollNodes(ctx context.Context) {
 	}
 	for _, n := range list.Items {
 		ts := n.Timestamp.Unix()
+		base := map[string]string{
+			"source": "k8s", "kind": "node", "cluster": c.cluster,
+			"node": n.Metadata.Name, "resource": n.Metadata.Name,
+		}
 		if cpu, err := ParseCPU(n.Usage.CPU); err == nil {
-			c.store.Add("k8s|node|"+n.Metadata.Name+"|cpu_cores",
-				map[string]string{"source": "k8s", "kind": "node", "node": n.Metadata.Name, "metric": "cpu_cores", "resource": n.Metadata.Name},
-				store.Point{T: ts, V: cpu})
+			c.store.Add("k8s|"+c.cluster+"|node|"+n.Metadata.Name+"|cpu_cores",
+				cloneWith(base, "metric", "cpu_cores"), store.Point{T: ts, V: cpu})
 		}
 		if mem, err := ParseMemory(n.Usage.Memory); err == nil {
-			c.store.Add("k8s|node|"+n.Metadata.Name+"|memory_bytes",
-				map[string]string{"source": "k8s", "kind": "node", "node": n.Metadata.Name, "metric": "memory_bytes", "resource": n.Metadata.Name},
-				store.Point{T: ts, V: mem})
+			c.store.Add("k8s|"+c.cluster+"|node|"+n.Metadata.Name+"|memory_bytes",
+				cloneWith(base, "metric", "memory_bytes"), store.Point{T: ts, V: mem})
 		}
 	}
 }
@@ -137,13 +152,17 @@ func (c *Collector) pollPods(ctx context.Context) {
 				}
 			}
 			labels := map[string]string{
-				"source": "k8s", "kind": "pod", "resource": key,
+				"source": "k8s", "kind": "pod", "resource": key, "cluster": c.cluster,
 				"namespace": pod.Metadata.Namespace, "pod": pod.Metadata.Name,
 			}
+			if info, ok := c.wl[key]; ok {
+				labels["workload"] = info.Workload
+				labels["workload_kind"] = info.WorkloadKind
+			}
 			cl := cloneWith(labels, "metric", "cpu_cores")
-			c.store.Add("k8s|pod|"+key+"|cpu_cores", cl, store.Point{T: ts, V: cpu})
+			c.store.Add("k8s|"+c.cluster+"|pod|"+key+"|cpu_cores", cl, store.Point{T: ts, V: cpu})
 			ml := cloneWith(labels, "metric", "memory_bytes")
-			c.store.Add("k8s|pod|"+key+"|memory_bytes", ml, store.Point{T: ts, V: mem})
+			c.store.Add("k8s|"+c.cluster+"|pod|"+key+"|memory_bytes", ml, store.Point{T: ts, V: mem})
 		}
 	}
 }

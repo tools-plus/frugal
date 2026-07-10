@@ -81,17 +81,18 @@ func runServer(ctx context.Context, cfg config.Config, logger *log.Logger) {
 	// Native pollers: Valkey / OpenSearch / RabbitMQ over their own APIs.
 	go native.Run(ctx, cfg.Native, st, logger)
 
-	// Kubernetes collector + log streaming client.
-	var kc *k8s.Client
+	// Kubernetes collectors + log streaming clients, one per cluster.
+	var clusters []server.Cluster
 	if cfg.Kubernetes.Enabled {
-		var err error
-		kc, err = k8s.NewClient(cfg.Kubernetes)
-		if err != nil {
-			logger.Printf("k8s: client disabled: %v", err)
-			kc = nil
-		} else {
-			go k8s.NewCollector(cfg.Kubernetes, kc, st, logger).Run(ctx)
-			logger.Printf("k8s: collector started (poll=%s)", cfg.Kubernetes.PollInterval())
+		for _, cc := range resolveClusters(ctx, cfg.Kubernetes, logger) {
+			kc, err := k8s.NewClient(cc)
+			if err != nil {
+				logger.Printf("k8s(%s): client disabled: %v", cc.Name, err)
+				continue
+			}
+			clusters = append(clusters, server.Cluster{Name: cc.Name, Client: kc})
+			go k8s.NewCollector(cfg.Kubernetes, cc.Name, kc, st, logger).Run(ctx)
+			logger.Printf("k8s(%s): collector started (poll=%s)", cc.Name, cfg.Kubernetes.PollInterval())
 		}
 	}
 
@@ -101,7 +102,7 @@ func runServer(ctx context.Context, cfg config.Config, logger *log.Logger) {
 
 	srv := &http.Server{
 		Addr:    cfg.Listen,
-		Handler: server.New(st, ls, kc, hist, cfg.IngestToken, web.FS, logger),
+		Handler: server.New(st, ls, clusters, hist, cfg.IngestToken, web.FS, logger),
 	}
 	go func() {
 		<-ctx.Done()
@@ -113,4 +114,43 @@ func runServer(ctx context.Context, cfg config.Config, logger *log.Logger) {
 		logger.Fatal(err)
 	}
 	fmt.Fprintln(os.Stderr, "bye")
+}
+
+// resolveClusters turns config into concrete cluster endpoints:
+// kubeconfig contexts (awsobs runs kubectl proxy for each), plus any
+// directly configured clusters, falling back to legacy single-cluster
+// config when neither is set.
+func resolveClusters(ctx context.Context, kcfg config.K8sConfig, logger *log.Logger) []config.ClusterConfig {
+	var out []config.ClusterConfig
+	seen := map[string]bool{}
+	add := func(cc config.ClusterConfig) {
+		if !seen[cc.Name] {
+			seen[cc.Name] = true
+			out = append(out, cc)
+		}
+	}
+
+	if len(kcfg.Contexts) > 0 {
+		names, err := k8s.ExpandContexts(ctx, kcfg.Contexts)
+		if err != nil {
+			logger.Printf("k8s: context discovery failed: %v", err)
+		}
+		for _, cn := range names {
+			url, err := k8s.StartProxy(ctx, cn, logger)
+			if err != nil {
+				logger.Printf("k8s: %v", err)
+				continue
+			}
+			name := k8s.ContextDisplayName(cn)
+			logger.Printf("k8s(%s): kubectl proxy started at %s (context %s)", name, url, cn)
+			add(config.ClusterConfig{Name: name, APIURL: url})
+		}
+	}
+	for _, cc := range kcfg.Clusters {
+		add(cc)
+	}
+	if len(out) == 0 {
+		out = kcfg.ClusterList() // legacy: in-cluster or proxy on :8001
+	}
+	return out
 }

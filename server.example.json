@@ -10,7 +10,12 @@
     "namespaces": ["AWS/RDS", "AWS/DocDB", "AWS/S3", "AWS/ApplicationELB", "AWS/NetworkELB", "AWS/EKS"],
     "poll_interval_seconds": 300
   },
-  "kubernetes": { "enabled": true, "poll_interval_seconds": 15 },
+  "kubernetes": {
+    "enabled": true,
+    "poll_interval_seconds": 15,
+    "contexts": ["plane-eks-dev", "plane-eks-atc", "plane-eks-prime"],
+    "clusters": []
+  },
   "native": {
     "poll_interval_seconds": 15,
     "valkey": [

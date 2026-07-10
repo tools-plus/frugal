@@ -68,6 +68,7 @@
   .res .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
   .res .meta { font-family: var(--mono); font-size: 10px; color: var(--muted); }
   .pdot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+  .caret { color: var(--muted); font-size: 10px; width: 12px; flex: none; }
   .pdot.Running { background: var(--ok); } .pdot.Pending { background: var(--warn); }
   .pdot.Failed, .pdot.Unknown { background: var(--bad); } .pdot.Succeeded { background: var(--muted); }
 
@@ -90,6 +91,18 @@
     margin-left: auto; background: var(--panel); border: 1px solid var(--line);
     color: var(--text); border-radius: 6px; padding: 5px 10px; width: 200px; font: 12px var(--mono);
   }
+  #ctxfilters { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  #ctxfilters select {
+    background: var(--panel); border: 1px solid var(--line); color: var(--text);
+    border-radius: 6px; padding: 5px 8px; font: 12px var(--mono); max-width: 220px;
+  }
+  #ctxfilters select:focus { outline: 1px solid var(--accent); }
+  #ctxfilters .lbl { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  #mainlogwrap { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+  #mainlog { flex: 1; overflow-y: auto; margin: 0; background: #0b0f15; border: 1px solid var(--line);
+    border-radius: 8px; padding: 12px 16px; font: 12px/1.6 var(--mono); color: #a8b6c8;
+    white-space: pre-wrap; word-break: break-all; }
+  #mainlog .ts { color: var(--muted); }
   .pills { display: flex; gap: 2px; background: var(--panel); border: 1px solid var(--line); border-radius: 7px; padding: 2px; }
   .pill { background: none; border: 0; color: var(--muted); font: 11px var(--mono); padding: 4px 9px; border-radius: 5px; cursor: pointer; }
   .pill:hover { color: var(--text); }
@@ -163,27 +176,26 @@
 "use strict";
 // ---------------- state ----------------
 const S = {
-  series: new Map(),      // id -> meta {id, labels}
-  data: new Map(),        // id -> Map(t -> v)  (ring + history + live merged)
-  ringLoaded: new Set(),  // ids whose ring buffer was fetched
-  histRange: new Map(),   // id -> largest history range (secs) fetched
-  charts: [],             // [{u, metric, members:[{id,variant,color}], card, valEl}]
-  dirty: new Set(),       // chart indexes needing redraw
-  pods: [],
-  service: null, resource: null,
-  range: 3600, mfilter: "", rsearch: "",
-  events: 0,
+  series: new Map(), data: new Map(), ringLoaded: new Set(), histRange: new Map(),
+  charts: [], dirty: new Set(), pods: [],
+  service: null,
+  resource: null,   // flat services
+  sel: null,        // EKS: {t:"cp"|"nodes"|"kind", cluster, kind, ns, wl, pod, node, view}
+  exp: new Set(),
+  range: 3600, mfilter: "", rsearch: "", events: 0,
 };
 const RING_SPAN = 6 * 3600;
-const PALETTE = ["#3fbfb4","#e8a33d","#9a7fdd","#d4537e","#5b9bd5","#97c459","#f09595","#b4b2a9"];
+const MEMBER_CAP = 12;
+const PALETTE = ["#3fbfb4","#e8a33d","#9a7fdd","#d4537e","#5b9bd5","#97c459","#f09595","#b4b2a9","#6fbf73","#e25d4e","#c9d4e3","#8a6d3b"];
 const RANGES = [[1800,"30m"],[3600,"1h"],[10800,"3h"],[21600,"6h"],[86400,"24h"],[259200,"3d"],[604800,"7d"]];
+const KIND_ORDER = ["Deployment","StatefulSet","DaemonSet","Job","CronJob","ReplicaSet","Rollout","Pod"];
+const KIND_PLURAL = {Deployment:"Deployments", StatefulSet:"StatefulSets", DaemonSet:"DaemonSets",
+  Job:"Jobs", CronJob:"CronJobs", ReplicaSet:"ReplicaSets", Rollout:"Rollouts", Pod:"Pods"};
 
 // ---------------- services ----------------
 const SVCMETA = {
-  "Pods":        {abbr:"PODS", title:"EKS pods (live)", k8s:true,  ord:0},
-  "Nodes":       {abbr:"NODE", title:"EKS nodes (live)", k8s:true, ord:1},
-  "Hosts":       {abbr:"HOST", title:"Host agents (EC2 / VMs)", k8s:true, ord:1.5},
-  "EKS":         {abbr:"EKS",  title:"EKS control plane", ord:2},
+  "EKS":         {abbr:"EKS",  title:"EKS clusters", live:true, ord:0},
+  "Hosts":       {abbr:"HOST", title:"Host agents (EC2 / VMs)", live:true, ord:1},
   "EC2":         {abbr:"EC2",  title:"EC2 instances", ord:3},
   "RDS":         {abbr:"RDS",  title:"RDS databases", ord:4},
   "DocDB":       {abbr:"DOC",  title:"DocumentDB", ord:5},
@@ -200,13 +212,13 @@ const NS2SVC = {EC2:"EC2", RDS:"RDS", DocDB:"DocDB", ElastiCache:"Valkey", Amazo
 
 function svcOf(meta) {
   const L = meta.labels || {};
-  if (L.source === "k8s") return L.kind === "pod" ? "Pods" : "Nodes";
+  if (L.source === "k8s") return "EKS";
   if (L.source === "agent") return "Hosts";
   if (L.source === "native") return L.svc || "Native";
   const ns = (L.namespace || "").replace("AWS/", "");
   return NS2SVC[ns] || ns || "Other";
 }
-const isK8sSvc = svc => !!(SVCMETA[svc] && SVCMETA[svc].k8s);
+const isLive = svc => !!(SVCMETA[svc] && SVCMETA[svc].live);
 
 // ---------------- formatting ----------------
 const fmtBytes = v => {
@@ -228,8 +240,8 @@ const fmtNum = v => {
 function metricFmt(name) {
   if (name === "cpu_cores") return fmtCores;
   if (/memory_bytes|Memory|Bytes|Storage|MemUsed|MemLimit|DiskFree/i.test(name)) return fmtBytes;
-  if (/Latency|ResponseTime/i.test(name)) return fmtSecs;
-  if (/Utilization|Percentage|Pressure|Ratio/i.test(name)) return fmtPct;
+  if (/Latency|ResponseTime|duration_seconds/i.test(name)) return fmtSecs;
+  if (/Utilization|Percentage|Pressure|Ratio|_pct$/i.test(name)) return fmtPct;
   return fmtNum;
 }
 
@@ -255,7 +267,13 @@ async function ensureHistory(id, range) {
   for (const p of pts) m.set(p.t, p.v);
   S.data.set(id, m);
 }
-function windowed(ids) { // compose uPlot data for member ids within range
+function lastVal(id) {
+  const m = S.data.get(id);
+  if (m && m.size) { let mt = -1, mv = null; for (const [t,v] of m) if (t > mt) { mt = t; mv = v; } return mv; }
+  const meta = S.series.get(id);
+  return meta && meta.last ? meta.last.v : null;
+}
+function windowed(ids) {
   const now = Math.floor(Date.now()/1000), from = now - S.range;
   const xset = new Set();
   for (const id of ids) {
@@ -285,7 +303,7 @@ function buildRail() {
   rail.innerHTML = "";
   let sect = null;
   for (const s of svcs) {
-    const want = isK8sSvc(s) ? "live" : "aws";
+    const want = isLive(s) ? "live" : "aws";
     if (sect !== want) {
       sect = want;
       const d = document.createElement("div");
@@ -302,9 +320,23 @@ function buildRail() {
   if (!S.service && svcs.length) selectService(svcs[0]);
 }
 
-// ---------------- resource list ----------------
+function selectService(svc) {
+  S.service = svc; S.resource = null; S.sel = null; S.rsearch = "";
+  document.getElementById("ressearch").value = "";
+  buildRail(); buildResList();
+  if (svc === "EKS") {
+    const cs = eksClusters();
+    if (cs.length) { S.exp.add("c:" + cs[0]); select({t:"cp", cluster: cs[0], view:"metrics"}); }
+    else renderMain();
+  } else {
+    const items = resourcesOf(svc);
+    if (items.length) selectResource(items[0][0]); else renderMain();
+  }
+}
+
+// ---------------- flat resource list (non-EKS) ----------------
 function resourcesOf(svc) {
-  const map = new Map(); // resource -> series count
+  const map = new Map();
   for (const meta of S.series.values()) {
     if (svcOf(meta) !== svc) continue;
     const r = (meta.labels||{}).resource || "_aggregate";
@@ -312,118 +344,348 @@ function resourcesOf(svc) {
   }
   return [...map.entries()].sort((a,b) => a[0].localeCompare(b[0]));
 }
-function selectService(svc) {
-  S.service = svc; S.resource = null; S.rsearch = "";
-  document.getElementById("ressearch").value = "";
-  buildRail(); buildResList();
-  const items = resourcesOf(svc);
-  if (items.length) selectResource(items[0][0]); else renderCharts();
-}
 function buildResList() {
-  const items = resourcesOf(S.service).filter(([r]) => !S.rsearch || r.toLowerCase().includes(S.rsearch));
   document.getElementById("svcname").textContent = SVCMETA[S.service] ? SVCMETA[S.service].title : (S.service||"—");
+  if (S.service === "EKS") { buildEKSNav(); return; }
+  const items = resourcesOf(S.service).filter(([r]) => !S.rsearch || r.toLowerCase().includes(S.rsearch));
   document.getElementById("svccnt").textContent = items.length;
   const box = document.getElementById("resitems");
   box.innerHTML = "";
-  const podInfo = new Map(S.pods.map(p => [p.namespace + "/" + p.name, p]));
   for (const [r, n] of items) {
     const b = document.createElement("button");
     b.className = "res" + (r === S.resource ? " active" : "");
-    const info = S.service === "Pods" ? podInfo.get(r) : null;
-    const dot = info ? `<span class="pdot ${info.phase}"></span>` : "";
-    const meta = info && info.restarts ? `↻${info.restarts}` : `${n}`;
-    b.innerHTML = `${dot}<span class="nm">${r === "_aggregate" ? "(aggregate)" : r}</span><span class="meta">${meta}</span>`;
+    b.innerHTML = `<span class="nm">${r === "_aggregate" ? "(aggregate)" : r}</span><span class="meta">${n}</span>`;
     b.onclick = () => selectResource(r);
     box.appendChild(b);
   }
 }
-function selectResource(r) {
-  S.resource = r;
-  buildResList();
-  renderCharts();
+function selectResource(r) { S.resource = r; S.sel = null; buildResList(); renderMain(); }
+
+// ---------------- EKS nav (shallow) ----------------
+function eksClusters() {
+  const set = new Set();
+  for (const p of S.pods) if (p.cluster) set.add(p.cluster);
+  for (const m of S.series.values()) {
+    const L = m.labels || {};
+    if (L.source === "k8s" && L.cluster) set.add(L.cluster);
+    if (L.source === "cloudwatch" && L.namespace === "AWS/EKS" && L.resource) set.add(L.resource);
+  }
+  return [...set].sort();
+}
+function clusterNodes(cluster) {
+  const set = new Set();
+  for (const m of S.series.values()) {
+    const L = m.labels || {};
+    if (L.source === "k8s" && L.kind === "node" && L.cluster === cluster) set.add(L.node);
+  }
+  return [...set].sort();
+}
+function podsOf(cluster, kind, ns, wl) {
+  return S.pods.filter(p => p.cluster === cluster
+    && (!kind || (p.workloadKind || "Pod") === kind)
+    && (!ns || p.namespace === ns)
+    && (!wl || (p.workload || p.name) === wl));
+}
+function kindCounts(cluster) { // kind -> distinct workload count
+  const m = new Map();
+  for (const p of S.pods) {
+    if (p.cluster !== cluster) continue;
+    const k = p.workloadKind || "Pod";
+    if (!m.has(k)) m.set(k, new Set());
+    m.get(k).add(p.namespace + "/" + (p.workload || p.name));
+  }
+  return m;
+}
+const selKey = s => s ? [s.t, s.cluster, s.kind, s.ns, s.wl, s.pod, s.node].join("~") : "";
+function select(sel) { S.sel = sel; S.resource = null; closeLogStream(); buildEKSNav(); renderMain(); }
+function toggle(key) { S.exp.has(key) ? S.exp.delete(key) : S.exp.add(key); buildEKSNav(); }
+
+function treeRow(box, depth, opts) {
+  const b = document.createElement("button");
+  b.className = "res" + (opts.active ? " active" : "");
+  b.style.paddingLeft = (10 + depth * 14) + "px";
+  const caret = opts.caret === undefined ? "" : `<span class="caret">${opts.caret ? "▾" : "▸"}</span>`;
+  b.innerHTML = `${caret}${opts.dot || ""}<span class="nm">${opts.label}</span>` +
+    (opts.tag !== undefined ? `<span class="meta">${opts.tag}</span>` : "");
+  b.onclick = opts.onclick;
+  box.appendChild(b);
+}
+
+function buildEKSNav() {
+  const box = document.getElementById("resitems");
+  box.innerHTML = "";
+  const clusters = eksClusters();
+  document.getElementById("svccnt").textContent = clusters.length + " clusters";
+  const k = selKey(S.sel);
+
+  if (S.rsearch) { // flat pod search across clusters
+    let shown = 0;
+    for (const p of S.pods) {
+      const hay = (p.cluster + "/" + p.namespace + "/" + p.name + "/" + (p.workload||"")).toLowerCase();
+      if (!hay.includes(S.rsearch)) continue;
+      if (++shown > 200) break;
+      treeRow(box, 0, {
+        label: p.namespace + "/" + p.name, tag: p.cluster,
+        dot: `<span class="pdot ${p.phase}"></span>`,
+        onclick: () => select({t:"kind", cluster:p.cluster, kind:p.workloadKind || "Pod",
+                               ns:p.namespace, wl:p.workload || p.name, pod:p.name, view:"metrics"}),
+      });
+    }
+    if (!shown) box.innerHTML = `<div class="empty" style="padding:30px 10px">no matches</div>`;
+    return;
+  }
+
+  for (const c of clusters) {
+    const open = S.exp.has("c:" + c);
+    treeRow(box, 0, {
+      label: c, caret: open,
+      active: k === selKey({t:"cp", cluster:c}),
+      onclick: () => { S.exp.add("c:" + c); select({t:"cp", cluster:c, view:"metrics"}); },
+    });
+    if (!open) continue;
+    treeRow(box, 1, {
+      label: "Control plane",
+      active: k === selKey({t:"cp", cluster:c}),
+      onclick: () => select({t:"cp", cluster:c, view:"metrics"}),
+    });
+    const nodes = clusterNodes(c);
+    treeRow(box, 1, {
+      label: "Nodes", tag: nodes.length,
+      active: S.sel && S.sel.t === "nodes" && S.sel.cluster === c,
+      onclick: () => select({t:"nodes", cluster:c, node:"", view:"metrics"}),
+    });
+    const kinds = kindCounts(c);
+    for (const kind of KIND_ORDER) {
+      if (!kinds.has(kind)) continue;
+      treeRow(box, 1, {
+        label: KIND_PLURAL[kind] || kind, tag: kinds.get(kind).size,
+        active: S.sel && S.sel.t === "kind" && S.sel.cluster === c && S.sel.kind === kind,
+        onclick: () => {
+          const pods = podsOf(c, kind);
+          const nss = [...new Set(pods.map(p => p.namespace))].sort();
+          const ns = nss[0] || "";
+          const wls = [...new Set(podsOf(c, kind, ns).map(p => p.workload || p.name))].sort();
+          select({t:"kind", cluster:c, kind, ns, wl: wls[0] || "", pod:"", view:"metrics"});
+        },
+      });
+    }
+  }
+  if (!clusters.length) box.innerHTML = `<div class="empty" style="padding:30px 10px">no clusters yet\ncheck kubernetes.contexts config</div>`;
 }
 
 // ---------------- time pills ----------------
 function buildPills() {
   const box = document.getElementById("pills");
   box.innerHTML = "";
+  const sel = S.sel;
+  const inLogs = sel && sel.view === "logs";
+  box.style.display = inLogs ? "none" : "";
+  document.getElementById("metricfilter").style.display = inLogs ? "none" : "";
+  const longOK = S.service !== "Hosts" && !(S.service === "EKS" && sel && sel.t !== "cp");
   for (const [secs, label] of RANGES) {
     const b = document.createElement("button");
-    b.className = "pill" + (secs === S.range ? " active" : "")
-      + (isK8sSvc(S.service) && secs > RING_SPAN ? " hidden" : "");
+    b.className = "pill" + (secs === S.range ? " active" : "") + (!longOK && secs > RING_SPAN ? " hidden" : "");
     b.textContent = label;
-    b.onclick = () => { S.range = secs; renderCharts(); };
+    b.onclick = () => { S.range = secs; renderMain(); };
     box.appendChild(b);
   }
 }
 
-// ---------------- charts ----------------
+// ---------------- context filter bar ----------------
+function mkSelect(opts, value, onchange) {
+  const sel = document.createElement("select");
+  for (const [v, label] of opts) {
+    const o = document.createElement("option");
+    o.value = v; o.textContent = label;
+    if (v === value) o.selected = true;
+    sel.appendChild(o);
+  }
+  sel.onchange = () => onchange(sel.value);
+  return sel;
+}
+function mkToggle(view) {
+  const box = document.createElement("div");
+  box.className = "pills";
+  for (const v of ["metrics", "logs"]) {
+    const b = document.createElement("button");
+    b.className = "pill" + (view === v ? " active" : "");
+    b.textContent = v;
+    b.onclick = () => {
+      const sel = {...S.sel, view: v};
+      if (v === "logs" && !sel.pod) { // logs need one pod
+        const pods = podsOf(sel.cluster, sel.kind, sel.ns, sel.wl);
+        sel.pod = pods.length ? pods[0].name : "";
+      }
+      select(sel);
+    };
+    box.appendChild(b);
+  }
+  return box;
+}
+function buildCtxFilters() {
+  let bar = document.getElementById("ctxfilters");
+  if (!bar) {
+    bar = document.createElement("div");
+    bar.id = "ctxfilters";
+    const rn = document.getElementById("rname");
+    rn.parentNode.insertBefore(bar, rn.nextSibling);
+  }
+  bar.innerHTML = "";
+  const sel = S.sel;
+  if (!sel || S.service !== "EKS") return;
+
+  if (sel.t === "nodes") {
+    const nodes = clusterNodes(sel.cluster);
+    bar.append(mkSelect([["", "All nodes"], ...nodes.map(n => [n, n])], sel.node,
+      v => select({...sel, node: v})));
+    return;
+  }
+  if (sel.t === "kind") {
+    const nss = [...new Set(podsOf(sel.cluster, sel.kind).map(p => p.namespace))].sort();
+    bar.append(mkSelect(nss.map(n => [n, n]), sel.ns, v => {
+      const wls = [...new Set(podsOf(sel.cluster, sel.kind, v).map(p => p.workload || p.name))].sort();
+      select({...sel, ns: v, wl: wls[0] || "", pod: ""});
+    }));
+    const wls = [...new Set(podsOf(sel.cluster, sel.kind, sel.ns).map(p => p.workload || p.name))].sort();
+    bar.append(mkSelect(wls.map(w => [w, w]), sel.wl, v => select({...sel, wl: v, pod: ""})));
+    const pods = podsOf(sel.cluster, sel.kind, sel.ns, sel.wl).sort((a,b) => a.name.localeCompare(b.name));
+    bar.append(mkSelect([["", "All pods"], ...pods.map(p => [p.name, p.name])], sel.pod,
+      v => select({...sel, pod: v, view: v ? sel.view : "metrics"})));
+    bar.append(mkToggle(sel.view));
+  }
+}
+
+// ---------------- main area ----------------
 const axisStyle = { stroke: "#6b7a8f", grid: {stroke: "#1c2531", width: 1}, ticks: {stroke: "#1c2531"} };
 
-async function renderCharts() {
-  buildPills();
+function groupsByMetric(metas) {
+  const byMetric = new Map();
+  for (const m of metas) {
+    const L = m.labels || {};
+    if (S.mfilter && !(L.metric||"").toLowerCase().includes(S.mfilter)) continue;
+    if (!byMetric.has(L.metric)) byMetric.set(L.metric, []);
+    byMetric.get(L.metric).push(m);
+  }
+  return [...byMetric.keys()].sort().map(metric => {
+    const ms = byMetric.get(metric).sort((a,b) => (a.labels.variant||"").localeCompare(b.labels.variant||"")).slice(0, MEMBER_CAP);
+    return {metric, members: ms.map((m, i) => ({id: m.id, variant: m.labels.variant || m.labels.stat || "", color: PALETTE[i % PALETTE.length]}))};
+  });
+}
+// overlay group: one chart per metric, one line per entity, top-N by usage
+function overlayGroups(metas, nameOf, total) {
+  const byMetric = new Map();
+  for (const m of metas) {
+    const metric = m.labels.metric;
+    if (S.mfilter && !metric.toLowerCase().includes(S.mfilter)) continue;
+    if (!byMetric.has(metric)) byMetric.set(metric, []);
+    byMetric.get(metric).push(m);
+  }
+  return [...byMetric.keys()].sort().map(metric => {
+    let ms = byMetric.get(metric);
+    ms.sort((a,b) => (lastVal(b.id) ?? -1) - (lastVal(a.id) ?? -1));
+    const over = Math.max(0, ms.length - MEMBER_CAP);
+    ms = ms.slice(0, MEMBER_CAP);
+    return {metric, over, members: ms.map((m, i) => ({id: m.id, variant: nameOf(m), color: PALETTE[i % PALETTE.length]}))};
+  });
+}
+
+function renderMain() {
+  buildPills(); buildCtxFilters();
   for (const c of S.charts) c.u && c.u.destroy();
   S.charts = []; S.dirty.clear();
   const box = document.getElementById("charts");
   box.innerHTML = "";
 
-  // main bar
-  document.getElementById("rname").textContent = S.resource ? (S.resource === "_aggregate" ? "(aggregate)" : S.resource) : "select a resource";
-  const info = S.service === "Pods" ? S.pods.find(p => p.namespace + "/" + p.name === S.resource) : null;
-  const ph = document.getElementById("rphase");
-  ph.textContent = info ? info.phase : ""; ph.className = "phase " + (info ? info.phase : "");
-  const lb = document.getElementById("logsbtn");
-  const isHost = S.service === "Hosts" && S.resource;
-  lb.style.display = (info || isHost) ? "" : "none";
-  lb.onclick = info ? () => openLogs(info) : (isHost ? () => openAgentLogs(S.resource) : null);
+  let title = "select a resource", groups = [], phase = "", hint = "";
+  const metas = [...S.series.values()];
+  const sel = S.sel;
 
-  if (!S.resource) { box.innerHTML = `<div class="empty">no resources found in this service yet</div>`; return; }
-
-  // group series by metric
-  const byMetric = new Map();
-  for (const meta of S.series.values()) {
-    const L = meta.labels || {};
-    if (svcOf(meta) !== S.service) continue;
-    if ((L.resource || "_aggregate") !== S.resource) continue;
-    if (S.mfilter && !(L.metric||"").toLowerCase().includes(S.mfilter)) continue;
-    if (!byMetric.has(L.metric)) byMetric.set(L.metric, []);
-    byMetric.get(L.metric).push(meta);
+  if (S.service === "EKS" && sel) {
+    if (sel.t === "cp") {
+      title = sel.cluster + " · control plane";
+      groups = groupsByMetric(metas.filter(m => {
+        const L = m.labels||{};
+        return L.source === "cloudwatch" && L.namespace === "AWS/EKS" && L.resource === sel.cluster;
+      }));
+      hint = "no AWS/EKS CloudWatch metrics for this cluster yet";
+    } else if (sel.t === "nodes") {
+      const nm = metas.filter(m => {
+        const L = m.labels||{};
+        return L.source === "k8s" && L.kind === "node" && L.cluster === sel.cluster
+          && (!sel.node || L.node === sel.node);
+      });
+      title = sel.cluster + " · " + (sel.node || "all nodes");
+      groups = sel.node ? groupsByMetric(nm) : overlayGroups(nm, m => m.labels.node);
+    } else if (sel.t === "kind") {
+      const pm = metas.filter(m => {
+        const L = m.labels||{};
+        return L.source === "k8s" && L.kind === "pod" && L.cluster === sel.cluster
+          && L.namespace === sel.ns && (L.workload || L.pod) === sel.wl
+          && (!sel.pod || L.pod === sel.pod);
+      });
+      title = sel.cluster + " · " + sel.ns + " / " + sel.wl + (sel.pod ? " / " + sel.pod : "");
+      if (sel.pod) {
+        const info = S.pods.find(p => p.cluster === sel.cluster && p.namespace === sel.ns && p.name === sel.pod);
+        phase = info ? info.phase : "";
+        if (sel.view === "logs") {
+          document.getElementById("rname").textContent = title;
+          setPhase(phase);
+          renderLogsInline(box, info || {cluster: sel.cluster, namespace: sel.ns, name: sel.pod, containers: []});
+          return;
+        }
+        groups = groupsByMetric(pm);
+      } else {
+        groups = overlayGroups(pm, m => m.labels.pod);
+      }
+      hint = "no pod metrics yet — is metrics-server running in this cluster?";
+    }
+  } else if (S.resource) {
+    title = S.resource === "_aggregate" ? "(aggregate)" : S.resource;
+    groups = groupsByMetric(metas.filter(m =>
+      svcOf(m) === S.service && ((m.labels||{}).resource || "_aggregate") === S.resource));
+    if (S.service === "Hosts" && S.charts) { /* logs via button below */ }
   }
-  const metrics = [...byMetric.keys()].sort();
-  if (!metrics.length) {
-    box.innerHTML = `<div class="empty">no metrics match\n(collectors may still be warming up)</div>`;
+
+  document.getElementById("rname").textContent = title;
+  setPhase(phase);
+  const lb = document.getElementById("logsbtn");
+  const hostLogs = S.service === "Hosts" && S.resource;
+  lb.style.display = hostLogs ? "" : "none";
+  lb.onclick = hostLogs ? () => openAgentLogs(S.resource) : null;
+
+  if (!groups.length) {
+    box.innerHTML = `<div class="empty">${hint || "no metrics here yet\n(collectors may still be warming up)"}</div>`;
     return;
   }
   const grid = document.createElement("div");
   grid.className = "grid";
   box.appendChild(grid);
 
-  const gen = renderCharts.gen = (renderCharts.gen||0) + 1;
-  for (const metric of metrics) {
-    const metas = byMetric.get(metric).sort((a,b) => ((a.labels.variant||"")).localeCompare(b.labels.variant||"")).slice(0, 8);
-    const members = metas.map((m, i) => ({id: m.id, variant: m.labels.variant || m.labels.stat || "", color: PALETTE[i % PALETTE.length]}));
-    const fmt = metricFmt(metric);
-
+  const gen = renderMain.gen = (renderMain.gen||0) + 1;
+  for (const g of groups) {
+    const fmt = metricFmt(g.metric);
     const card = document.createElement("div");
     card.className = "card";
-    card.innerHTML = `<div class="hd"><span class="title">${metric}</span><span class="val">–</span></div><div class="plot"></div>`;
-    if (members.length > 1) {
+    card.innerHTML = `<div class="hd"><span class="title">${g.metric}</span><span class="val">–</span></div><div class="plot"></div>`;
+    if (g.members.length > 1) {
       const lg = document.createElement("div");
       lg.className = "legend";
-      lg.innerHTML = members.map(m => `<span><span class="sw" style="background:${m.color}"></span>${m.variant || "value"}</span>`).join("");
+      lg.innerHTML = g.members.map(m => `<span><span class="sw" style="background:${m.color}"></span>${m.variant || "value"}</span>`).join("")
+        + (g.over ? `<span>+${g.over} more (top ${MEMBER_CAP} by current value)</span>` : "");
       card.appendChild(lg);
     }
     grid.appendChild(card);
-
-    const chart = {u: null, metric, members, fmt, card, valEl: card.querySelector(".val")};
+    const chart = {u: null, metric: g.metric, members: g.members, fmt, card, valEl: card.querySelector(".val")};
     S.charts.push(chart);
-
-    // load data then draw
-    Promise.all(members.map(m => ensureRing(m.id).then(() => ensureHistory(m.id, S.range)))).then(() => {
-      if (renderCharts.gen !== gen) return; // stale render
+    Promise.all(g.members.map(m => ensureRing(m.id).then(() => ensureHistory(m.id, S.range)))).then(() => {
+      if (renderMain.gen !== gen) return;
       drawChart(chart);
     });
   }
+}
+function setPhase(phase) {
+  const ph = document.getElementById("rphase");
+  ph.textContent = phase; ph.className = "phase " + phase;
 }
 
 function drawChart(chart) {
@@ -459,8 +721,6 @@ function updateVal(chart, data) {
   for (let i = col.length - 1; i >= 0; i--) if (col[i] != null) { last = col[i]; break; }
   chart.valEl.textContent = chart.fmt(last);
 }
-
-// redraw dirty charts at most once a second (SSE points arrive in bursts)
 setInterval(() => {
   for (const idx of S.dirty) {
     const c = S.charts[idx];
@@ -483,7 +743,7 @@ function connectStream() {
     const m = S.data.get(u.id) || new Map();
     m.set(u.point.t, u.point.v);
     S.data.set(u.id, m);
-    if (isNew) { buildRail(); if (svcOf({labels: u.labels}) === S.service) buildResList(); return; }
+    if (isNew) { buildRail(); if (svcOf({labels: u.labels || {}}) === S.service) buildResList(); return; }
     S.charts.forEach((c, i) => { if (c.members.some(mb => mb.id === u.id)) S.dirty.add(i); });
   });
 }
@@ -492,53 +752,67 @@ setInterval(() => {
   S.events = 0;
 }, 10000);
 
-// ---------------- logs drawer ----------------
+// ---------------- logs (inline + drawer) ----------------
 let logES = null;
-function startLogStream(pod, container) {
-  startLogURL(`/api/logs?namespace=${encodeURIComponent(pod.namespace)}&pod=${encodeURIComponent(pod.name)}&container=${encodeURIComponent(container||"")}&tail=200`);
+function closeLogStream() { if (logES) { logES.close(); logES = null; } }
+function pushLine(target, txt) {
+  const atBottom = target.scrollTop + target.clientHeight >= target.scrollHeight - 40;
+  const sp = txt.indexOf(" ");
+  const div = document.createElement("div");
+  if (sp > 0) div.innerHTML = `<span class="ts">${txt.slice(0, sp)}</span> ${escapeHTML(txt.slice(sp+1))}`;
+  else div.textContent = txt;
+  target.appendChild(div);
+  while (target.children.length > 2000) target.removeChild(target.firstChild);
+  const follow = document.getElementById("follow");
+  if ((follow && target.id === "loglines") ? follow.checked : atBottom) target.scrollTop = target.scrollHeight;
 }
-function startLogURL(url) {
-  if (logES) logES.close();
-  const lines = document.getElementById("loglines");
-  lines.textContent = "";
+function startLogURL(url, target) {
+  closeLogStream();
+  target.textContent = "";
   logES = new EventSource(url);
-  const push = txt => {
-    const sp = txt.indexOf(" ");
-    const div = document.createElement("div");
-    if (sp > 0) div.innerHTML = `<span class="ts">${txt.slice(0, sp)}</span> ${escapeHTML(txt.slice(sp+1))}`;
-    else div.textContent = txt;
-    lines.appendChild(div);
-    while (lines.children.length > 2000) lines.removeChild(lines.firstChild);
-    if (document.getElementById("follow").checked) lines.scrollTop = lines.scrollHeight;
-  };
-  logES.addEventListener("log", ev => push(JSON.parse(ev.data)));
-  logES.addEventListener("error", ev => { if (ev.data) push("!! " + JSON.parse(ev.data)); });
-  logES.addEventListener("eof", () => push("-- log stream ended --"));
+  logES.addEventListener("log", ev => pushLine(target, JSON.parse(ev.data)));
+  logES.addEventListener("error", ev => { if (ev.data) pushLine(target, "!! " + JSON.parse(ev.data)); });
+  logES.addEventListener("eof", () => pushLine(target, "-- log stream ended --"));
 }
+function logsURLFor(pod, container) {
+  return `/api/logs?cluster=${encodeURIComponent(pod.cluster||"")}&namespace=${encodeURIComponent(pod.namespace)}&pod=${encodeURIComponent(pod.name)}&container=${encodeURIComponent(container||"")}&tail=200`;
+}
+// inline (main area) log view for EKS pod selections
+function renderLogsInline(box, pod) {
+  const wrap = document.createElement("div");
+  wrap.id = "mainlogwrap";
+  const bar = document.createElement("div");
+  bar.style.cssText = "display:flex;align-items:center;gap:10px;margin-bottom:10px;";
+  if ((pod.containers || []).length > 1) {
+    const lbl = document.createElement("span");
+    lbl.className = "lbl"; lbl.textContent = "container";
+    lbl.style.cssText = "font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)";
+    const csel = mkSelect(pod.containers.map(c => [c, c]), pod.containers[0],
+      v => startLogURL(logsURLFor(pod, v), document.getElementById("mainlog")));
+    bar.append(lbl, csel);
+  }
+  const pre = document.createElement("pre");
+  pre.id = "mainlog";
+  wrap.append(bar, pre);
+  box.appendChild(wrap);
+  startLogURL(logsURLFor(pod, (pod.containers || [])[0] || ""), pre);
+}
+// drawer (Hosts)
 function openAgentLogs(host) {
   document.getElementById("logname").textContent = host;
   document.getElementById("logcontainer").style.display = "none";
   document.getElementById("drawer").classList.add("open");
-  startLogURL(`/api/agentlogs?source=${encodeURIComponent("host/" + host)}&tail=200`);
-}
-function openLogs(pod) {
-  document.getElementById("logname").textContent = pod.namespace + "/" + pod.name;
-  const sel = document.getElementById("logcontainer");
-  sel.innerHTML = (pod.containers || []).map(c => `<option value="${c}">${c}</option>`).join("");
-  sel.style.display = (pod.containers || []).length > 1 ? "" : "none";
-  sel.onchange = () => startLogStream(pod, sel.value);
-  document.getElementById("drawer").classList.add("open");
-  startLogStream(pod, (pod.containers || [])[0] || "");
+  startLogURL(`/api/agentlogs?source=${encodeURIComponent("host/" + host)}&tail=200`, document.getElementById("loglines"));
 }
 function escapeHTML(s) { return s.replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
 document.getElementById("closelog").onclick = () => {
   document.getElementById("drawer").classList.remove("open");
-  if (logES) { logES.close(); logES = null; }
+  closeLogStream();
 };
 
 // ---------------- inputs ----------------
 document.getElementById("ressearch").addEventListener("input", e => { S.rsearch = e.target.value.toLowerCase(); buildResList(); });
-document.getElementById("metricfilter").addEventListener("input", e => { S.mfilter = e.target.value.toLowerCase(); renderCharts(); });
+document.getElementById("metricfilter").addEventListener("input", e => { S.mfilter = e.target.value.toLowerCase(); renderMain(); });
 
 // ---------------- boot ----------------
 async function boot() {
@@ -555,7 +829,7 @@ async function boot() {
   setInterval(async () => {
     try {
       S.pods = await fetch("/api/pods").then(r => r.ok ? r.json() : S.pods);
-      if (S.service === "Pods") buildResList();
+      if (S.service === "EKS" && !S.rsearch) buildEKSNav();
     } catch {}
   }, 30000);
 }

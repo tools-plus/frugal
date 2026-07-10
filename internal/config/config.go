@@ -9,18 +9,50 @@ import (
 	"time"
 )
 
+// ClusterConfig identifies one Kubernetes cluster to collect from.
+type ClusterConfig struct {
+	Name string `json:"name"`
+	// APIURL, e.g. http://127.0.0.1:8001 for `kubectl proxy --port 8001`.
+	// Empty means autodetect (in-cluster ServiceAccount, else proxy on 8001).
+	APIURL                string `json:"api_url"`
+	BearerToken           string `json:"bearer_token"`
+	InsecureSkipTLSVerify bool   `json:"insecure_skip_tls_verify"`
+}
+
 type K8sConfig struct {
 	Enabled bool `json:"enabled"`
 	// Namespaces to watch; empty means all namespaces.
 	Namespaces []string `json:"namespaces"`
 	// PollIntervalSeconds for pod/node metrics (metrics-server resolution is ~15s).
 	PollIntervalSeconds int `json:"poll_interval_seconds"`
-	// APIURL overrides autodetection (e.g. http://127.0.0.1:8001 for `kubectl proxy`).
-	APIURL string `json:"api_url"`
-	// BearerToken for out-of-cluster access to a real API server.
-	BearerToken string `json:"bearer_token"`
-	// InsecureSkipTLSVerify for lab clusters only.
-	InsecureSkipTLSVerify bool `json:"insecure_skip_tls_verify"`
+	// Contexts are kubeconfig context names (`kubectl config get-contexts`).
+	// awsobs spawns and supervises a kubectl proxy per context — the easy
+	// path for local use. "*" expands to every context in the kubeconfig.
+	Contexts []string `json:"contexts"`
+	// Clusters are direct API endpoints (your own proxy, or api_url +
+	// bearer_token). Can be combined with contexts.
+	Clusters []ClusterConfig `json:"clusters"`
+
+	// Legacy single-cluster fields (used only when clusters is empty).
+	Name                  string `json:"cluster_name"`
+	APIURL                string `json:"api_url"`
+	BearerToken           string `json:"bearer_token"`
+	InsecureSkipTLSVerify bool   `json:"insecure_skip_tls_verify"`
+}
+
+// ClusterList normalizes config into a list of clusters.
+func (c K8sConfig) ClusterList() []ClusterConfig {
+	if len(c.Clusters) > 0 {
+		return c.Clusters
+	}
+	name := c.Name
+	if name == "" {
+		name = "default"
+	}
+	return []ClusterConfig{{
+		Name: name, APIURL: c.APIURL,
+		BearerToken: c.BearerToken, InsecureSkipTLSVerify: c.InsecureSkipTLSVerify,
+	}}
 }
 
 type AWSConfig struct {
