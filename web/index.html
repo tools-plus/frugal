@@ -184,7 +184,21 @@ const S = {
   sel: null,        // EKS: {t:"cp"|"nodes"|"kind", cluster, kind, ns, wl, pod, node, view}
   exp: new Set(),
   range: 3600, mfilter: "", rsearch: "", events: 0,
+  status: null,
 };
+function svcConfigured(svc) {
+  if (!S.status) return null; // unknown yet
+  if (svc === "EKS") return (S.status.clusters || []).length > 0 ||
+    ((S.status.aws && S.status.aws.namespaces) || []).includes("AWS/EKS");
+  if (svc === "Hosts") return null; // agents are push-based; can't know from config
+  if ((S.status.native || []).includes(svc)) return true;
+  const nsList = (S.status.aws && S.status.aws.namespaces) || [];
+  for (const ns of nsList) {
+    const short = ns.replace("AWS/", "");
+    if ((NS2SVC[short] || short) === svc) return true;
+  }
+  return false;
+}
 const RING_SPAN = 6 * 3600;
 const MEMBER_CAP = 12;
 const PALETTE = ["#3fbfb4","#e8a33d","#9a7fdd","#d4537e","#5b9bd5","#97c459","#f09595","#b4b2a9","#6fbf73","#e25d4e","#c9d4e3","#8a6d3b"];
@@ -314,9 +328,14 @@ function buildRail() {
       rail.appendChild(d);
     }
     const n = seen.get(s) || 0;
+    const conf = svcConfigured(s);
+    if (!n && conf === false) continue; // not collected: don't show a dead tile
     const b = document.createElement("button");
     b.className = "tile" + (s === S.service ? " active" : "") + (n ? "" : " empty");
-    b.title = (SVCMETA[s] ? SVCMETA[s].title : s) + " · " + (n ? n + " series" : "loading…");
+    let state = n ? n + " series" : "loading…";
+    if (!n && conf === null && s === "Hosts") state = "no agents reporting yet";
+    if (!n && Date.now() - BOOT_T > 120000) state = "configured, but no data yet";
+    b.title = (SVCMETA[s] ? SVCMETA[s].title : s) + " · " + state;
     b.textContent = SVCMETA[s] ? SVCMETA[s].abbr : s.slice(0, 4).toUpperCase();
     b.onclick = () => selectService(s);
     rail.appendChild(b);
@@ -860,6 +879,8 @@ async function boot() {
     setInterval(refreshPods, 30000);
   })();
   fetch("/api/status").then(r => r.json()).then(st => {
+    S.status = st;
+    buildRail();
     const aws = st && st.aws;
     if (aws && aws.last_error) {
       document.getElementById("dot").title = "aws collector: " + aws.last_error;

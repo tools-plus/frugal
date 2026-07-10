@@ -174,6 +174,23 @@ type Collector struct {
 	lastDisc time.Time
 }
 
+// EffectiveNamespaces returns the namespaces a config would collect
+// (explicit list, or all built-in defaults + wildcards).
+func EffectiveNamespaces(cfg config.AWSConfig) []string {
+	if len(cfg.Namespaces) > 0 {
+		return cfg.Namespaces
+	}
+	var out []string
+	for ns := range defaults {
+		out = append(out, ns)
+	}
+	for ns := range wildcardNamespaces {
+		out = append(out, ns)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // Status reports collector health for /api/status.
 func (c *Collector) Status() map[string]any {
 	c.mu.RLock()

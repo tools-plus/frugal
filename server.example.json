@@ -9,7 +9,7 @@
     "enabled": true,
     "region": "",
     "profile": "",
-    "namespaces": ["AWS/RDS", "AWS/DocDB", "AWS/S3", "AWS/ApplicationELB", "AWS/NetworkELB", "AWS/EKS"],
+    "namespaces": ["AWS/RDS", "AWS/DocDB", "AWS/S3", "AWS/ApplicationELB", "AWS/NetworkELB", "AWS/EKS", "AWS/EC2"],
     "poll_interval_seconds": 300
   },
   "kubernetes": {

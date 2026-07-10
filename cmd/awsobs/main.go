@@ -128,8 +128,21 @@ func runServer(ctx context.Context, cfg config.Config, logger *log.Logger) {
 	statusFn := func() map[string]any {
 		out := map[string]any{}
 		if awsCol != nil {
-			out["aws"] = awsCol.Status()
+			a := awsCol.Status()
+			a["namespaces"] = awsmetrics.EffectiveNamespaces(cfg.AWS)
+			out["aws"] = a
 		}
+		native := []string{}
+		if len(cfg.Native.Valkey) > 0 {
+			native = append(native, "Valkey")
+		}
+		if len(cfg.Native.OpenSearch) > 0 {
+			native = append(native, "OpenSearch")
+		}
+		if len(cfg.Native.RabbitMQ) > 0 {
+			native = append(native, "MQ")
+		}
+		out["native"] = native
 		return out
 	}
 	srv := &http.Server{
