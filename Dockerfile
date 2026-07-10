@@ -3,9 +3,11 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /awsobs ./cmd/awsobs
+# CGO for the sqlite driver; distroless base (not static) provides glibc.
+RUN CGO_ENABLED=1 go build -ldflags="-s -w" -o /awsobs ./cmd/awsobs
 
-FROM gcr.io/distroless/static-debian12
+FROM gcr.io/distroless/base-debian12
 COPY --from=build /awsobs /awsobs
 EXPOSE 8080
+# Mount a volume at /data and set "data_dir": "/data" for persistence.
 ENTRYPOINT ["/awsobs"]

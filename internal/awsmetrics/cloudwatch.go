@@ -167,6 +167,36 @@ type Collector struct {
 	mu      sync.RWMutex
 	targets []target
 	reg     map[string]target // series ID -> target, for History()
+
+	stMu     sync.Mutex
+	lastErr  string
+	lastPoll time.Time
+	lastDisc time.Time
+}
+
+// Status reports collector health for /api/status.
+func (c *Collector) Status() map[string]any {
+	c.mu.RLock()
+	n := len(c.targets)
+	c.mu.RUnlock()
+	c.stMu.Lock()
+	defer c.stMu.Unlock()
+	return map[string]any{
+		"targets":        n,
+		"last_error":     c.lastErr,
+		"last_poll":      c.lastPoll,
+		"last_discovery": c.lastDisc,
+	}
+}
+
+func (c *Collector) setErr(err error) {
+	c.stMu.Lock()
+	if err != nil {
+		c.lastErr = err.Error()
+	} else {
+		c.lastErr = ""
+	}
+	c.stMu.Unlock()
 }
 
 func New(ctx context.Context, cfg config.AWSConfig, st *store.Store, logger *log.Logger) (*Collector, error) {
@@ -214,6 +244,10 @@ func (c *Collector) Run(ctx context.Context) {
 	}
 }
 
+// discover walks all namespaces in parallel (bounded) and tolerates
+// per-namespace failures: one throttled or unauthorized ListMetrics must
+// not blank out every other service. On total failure the previous target
+// set is kept so already-working charts keep updating.
 func (c *Collector) discover(ctx context.Context) error {
 	namespaces := c.cfg.Namespaces
 	if len(namespaces) == 0 {
@@ -226,21 +260,44 @@ func (c *Collector) discover(ctx context.Context) error {
 		sort.Strings(namespaces)
 	}
 
-	var targets []target
+	var (
+		wg      sync.WaitGroup
+		resMu   sync.Mutex
+		targets []target
+		errs    []string
+	)
+	sem := make(chan struct{}, 4)
 	for _, ns := range namespaces {
-		var (
-			found []target
-			err   error
-		)
-		if defs, ok := defaults[ns]; ok && !wildcardNamespaces[ns] {
-			found, err = c.discoverCurated(ctx, ns, defs)
-		} else {
-			found, err = c.discoverAll(ctx, ns)
-		}
-		if err != nil {
-			return err
-		}
-		targets = append(targets, found...)
+		wg.Add(1)
+		go func(ns string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			var (
+				found []target
+				err   error
+			)
+			if defs, ok := defaults[ns]; ok && !wildcardNamespaces[ns] {
+				found, err = c.discoverCurated(ctx, ns, defs)
+			} else {
+				found, err = c.discoverAll(ctx, ns)
+			}
+			resMu.Lock()
+			defer resMu.Unlock()
+			if err != nil {
+				c.logger.Printf("aws: discovery %s failed (continuing): %v", ns, err)
+				errs = append(errs, ns+": "+err.Error())
+				return
+			}
+			targets = append(targets, found...)
+		}(ns)
+	}
+	wg.Wait()
+
+	if len(targets) == 0 && len(errs) > 0 {
+		err := fmt.Errorf("all namespaces failed: %s", strings.Join(errs, "; "))
+		c.setErr(err)
+		return err // keep previous targets
 	}
 
 	reg := make(map[string]target, len(targets))
@@ -251,7 +308,15 @@ func (c *Collector) discover(ctx context.Context) error {
 	c.targets = targets
 	c.reg = reg
 	c.mu.Unlock()
-	c.logger.Printf("aws: discovery found %d metric targets", len(targets))
+	c.stMu.Lock()
+	c.lastDisc = time.Now()
+	c.stMu.Unlock()
+	if len(errs) > 0 {
+		c.setErr(fmt.Errorf("partial discovery, failed: %s", strings.Join(errs, "; ")))
+	} else {
+		c.setErr(nil)
+	}
+	c.logger.Printf("aws: discovery found %d metric targets (%d namespace errors)", len(targets), len(errs))
 	return nil
 }
 
@@ -361,6 +426,9 @@ func (c *Collector) poll(ctx context.Context) {
 	}
 	end := time.Now()
 	start := end.Add(-5 * time.Duration(period) * time.Second)
+	c.stMu.Lock()
+	c.lastPoll = end
+	c.stMu.Unlock()
 
 	const batchSize = 500
 	for off := 0; off < len(targets); off += batchSize {
@@ -384,6 +452,7 @@ func (c *Collector) poll(ctx context.Context) {
 			page, err := p.NextPage(ctx)
 			if err != nil {
 				c.logger.Printf("aws: GetMetricData: %v", err)
+				c.setErr(err)
 				break
 			}
 			for _, r := range page.MetricDataResults {

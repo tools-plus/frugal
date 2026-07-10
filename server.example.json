@@ -1,6 +1,8 @@
 {
   "listen": ":8080",
   "ingest_token": "CHANGE_ME_SHARED_INGEST_TOKEN",
+  "data_dir": "./data",
+  "db_retention_hours": 72,
   "retention_points": 720,
   "log_retention_lines": 2000,
   "aws": {

@@ -37,16 +37,18 @@ type Cluster struct {
 type Server struct {
 	store       *store.Store
 	logs        *logstore.Store
+	inv         *k8s.Inventory
 	clusters    []Cluster // empty when kubernetes collection is disabled
 	hist        Historian // nil when the AWS collector is disabled
+	status      func() map[string]any
 	ingestToken string
 	logger      *log.Logger
 	assets      embed.FS
 	mux         *http.ServeMux
 }
 
-func New(st *store.Store, ls *logstore.Store, clusters []Cluster, hist Historian, ingestToken string, assets embed.FS, logger *log.Logger) *Server {
-	s := &Server{store: st, logs: ls, clusters: clusters, hist: hist, ingestToken: ingestToken, logger: logger, assets: assets}
+func New(st *store.Store, ls *logstore.Store, inv *k8s.Inventory, clusters []Cluster, hist Historian, status func() map[string]any, ingestToken string, assets embed.FS, logger *log.Logger) *Server {
+	s := &Server{store: st, logs: ls, inv: inv, clusters: clusters, hist: hist, status: status, ingestToken: ingestToken, logger: logger, assets: assets}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", s.handleIndex)
 	mux.HandleFunc("GET /api/series", s.handleSeries)
@@ -54,6 +56,7 @@ func New(st *store.Store, ls *logstore.Store, clusters []Cluster, hist Historian
 	mux.HandleFunc("GET /api/history", s.handleHistory)
 	mux.HandleFunc("GET /api/stream", s.handleStream)
 	mux.HandleFunc("GET /api/pods", s.handlePods)
+	mux.HandleFunc("GET /api/status", s.handleStatus)
 	mux.HandleFunc("GET /api/logs", s.handleLogs)
 	mux.HandleFunc("GET /api/agentlogs", s.handleAgentLogs)
 	mux.HandleFunc("POST /api/ingest", s.auth(s.handleIngest))
@@ -128,20 +131,28 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, pts)
 }
 
-// GET /api/pods — merged inventory across all clusters.
+// GET /api/pods — served from the collectors' shared in-memory inventory
+// (refreshed every poll), so page loads never wait on cluster API calls.
 func (s *Server) handlePods(w http.ResponseWriter, r *http.Request) {
-	out := []k8s.PodInfo{}
-	for _, c := range s.clusters {
-		pods, err := c.Client.ListPods(r.Context(), r.URL.Query().Get("namespace"))
-		if err != nil {
-			s.logger.Printf("pods(%s): %v", c.Name, err)
-			continue
-		}
-		for i := range pods {
-			pods[i].Cluster = c.Name
-		}
-		out = append(out, pods...)
+	if s.inv == nil {
+		writeJSON(w, []k8s.PodInfo{})
+		return
 	}
+	writeJSON(w, s.inv.All())
+}
+
+// GET /api/status — collector health for debugging "why is X empty".
+func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	out := map[string]any{}
+	if s.status != nil {
+		out = s.status()
+	}
+	names := make([]string, 0, len(s.clusters))
+	for _, c := range s.clusters {
+		names = append(names, c.Name)
+	}
+	out["clusters"] = names
+	out["series"] = len(s.store.List(""))
 	writeJSON(w, out)
 }
 

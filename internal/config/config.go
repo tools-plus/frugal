@@ -127,6 +127,12 @@ type Config struct {
 	// token. Empty means unauthenticated ingest (fine on localhost only).
 	IngestToken       string `json:"ingest_token"`
 	LogRetentionLines int    `json:"log_retention_lines"`
+	// DataDir enables SQLite persistence: <data_dir>/awsobs.db stores all
+	// polled series, points, logs, and pod inventory, hydrating the
+	// dashboard instantly on restart. Empty disables persistence.
+	DataDir string `json:"data_dir"`
+	// DBRetentionHours bounds how much point history SQLite keeps (default 72).
+	DBRetentionHours int `json:"db_retention_hours"`
 }
 
 func Default() Config {

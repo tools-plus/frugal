@@ -24,11 +24,12 @@ type Collector struct {
 	store   *store.Store
 	logger  *log.Logger
 
-	wl map[string]PodInfo // "ns/pod" -> inventory (for workload labels)
+	inv *Inventory
+	wl  map[string]PodInfo // "ns/pod" -> inventory (for workload labels)
 }
 
-func NewCollector(cfg config.K8sConfig, cluster string, cl *Client, st *store.Store, logger *log.Logger) *Collector {
-	return &Collector{cfg: cfg, cluster: cluster, client: cl, store: st, logger: logger, wl: map[string]PodInfo{}}
+func NewCollector(cfg config.K8sConfig, cluster string, cl *Client, st *store.Store, inv *Inventory, logger *log.Logger) *Collector {
+	return &Collector{cfg: cfg, cluster: cluster, client: cl, store: st, inv: inv, logger: logger, wl: map[string]PodInfo{}}
 }
 
 func (c *Collector) Run(ctx context.Context) {
@@ -85,6 +86,9 @@ func (c *Collector) poll(ctx context.Context) {
 			m[p.Namespace+"/"+p.Name] = p
 		}
 		c.wl = m
+		if c.inv != nil {
+			c.inv.Set(c.cluster, pods)
+		}
 	} else {
 		c.logger.Printf("k8s(%s): pod inventory: %v", c.cluster, err)
 	}

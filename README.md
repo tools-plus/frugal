@@ -105,10 +105,18 @@ a bug.
 - live log tails: `GET .../pods/{pod}/log?follow=true` — the same call
   `kubectl logs -f` makes, streamed to the browser over SSE
 
-**Storage** — fixed-size ring buffer per series (default 720 points ≈ 6h at
-30s). Older data lives in CloudWatch itself; query it there when you need
-history. This keeps the tool stateless — restart it and charts refill within
-one poll. For time ranges beyond the buffer (24h/3d/7d in the UI)
+**Storage** — SQLite is the system of record, memory is the hot path. With
+`data_dir` set, the server ensures `<data_dir>/awsobs.db` and its schema on
+start (tables: series, points, logs, pods; WAL mode), hydrates the
+in-memory stores from it so the dashboard serves data *immediately* on
+restart, and persists everything collectors produce in batched background
+transactions (points flush every 2s, pod inventory every 30s). Point
+history is pruned to `db_retention_hours` (default 72) and logs to
+`log_retention_lines` per source. The sqlite driver needs CGO
+(`CGO_ENABLED=1`, the default on a normal build); agents cross-compiled
+with `CGO_ENABLED=0` still build — they just don't include the driver they
+never use. For a pure-Go server binary swap the driver import in
+`internal/db/driver_cgo.go` to `modernc.org/sqlite`. For time ranges beyond the buffer (24h/3d/7d in the UI)
 the dashboard queries CloudWatch on demand through `/api/history`.
 
 **Live updates** — every new point fans out to connected dashboards over
@@ -148,7 +156,8 @@ Keep it behind port-forward, your VPN, or an authenticating ingress.
 | `GET /api/series/data?id=` | full ring buffer for one series |
 | `GET /api/history?id=&from=&to=` | on-demand CloudWatch fetch for long ranges (unix seconds) |
 | `GET /api/stream` | SSE: every new point, as it lands |
-| `GET /api/pods` | pod inventory |
+| `GET /api/pods` | pod inventory (served from the collectors' in-memory cache — instant) |
+| `GET /api/status` | collector health: CloudWatch target count, last error, last poll, clusters |
 | `GET /api/logs?namespace=&pod=&container=&tail=` | SSE: live pod log tail (k8s API, or agent-shipped fallback) |
 | `GET /api/agentlogs?source=host/<name>&tail=` | SSE: live tail of agent-shipped logs |
 | `POST /api/ingest` | agent metric push (bearer token) |

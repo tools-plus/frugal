@@ -18,10 +18,12 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/example/awsobs/internal/agent"
 	"github.com/example/awsobs/internal/awsmetrics"
 	"github.com/example/awsobs/internal/config"
+	"github.com/example/awsobs/internal/db"
 	"github.com/example/awsobs/internal/k8s"
 	"github.com/example/awsobs/internal/logstore"
 	"github.com/example/awsobs/internal/native"
@@ -63,9 +65,31 @@ func main() {
 func runServer(ctx context.Context, cfg config.Config, logger *log.Logger) {
 	st := store.New(cfg.RetentionCap)
 	ls := logstore.New(cfg.LogRetentionLines)
+	inv := k8s.NewInventory()
+
+	// SQLite persistence (optional): ensure schema, hydrate the hot stores
+	// from disk so the dashboard serves data immediately, then persist all
+	// polled data in the background while collectors refresh it.
+	var sdb *db.DB
+	var persistDone <-chan struct{}
+	if cfg.DataDir != "" {
+		var err error
+		sdb, err = db.Open(cfg.DataDir, logger)
+		if err != nil {
+			logger.Printf("db: disabled: %v", err)
+		} else {
+			if cfg.DBRetentionHours > 0 {
+				sdb.RetentionHours = cfg.DBRetentionHours
+			}
+			sdb.LogLinesPerSource = cfg.LogRetentionLines
+			sdb.Hydrate(st, ls, inv)
+			persistDone = sdb.StartPersist(ctx, st, ls, inv)
+		}
+	}
 
 	// CloudWatch collector — degrades gracefully without credentials.
 	var hist server.Historian
+	var awsCol *awsmetrics.Collector
 	if cfg.AWS.Enabled {
 		col, err := awsmetrics.New(ctx, cfg.AWS, st, logger)
 		if err != nil {
@@ -73,6 +97,7 @@ func runServer(ctx context.Context, cfg config.Config, logger *log.Logger) {
 		} else {
 			go col.Run(ctx)
 			hist = col
+			awsCol = col
 			logger.Printf("aws: collector started (region=%q profile=%q poll=%s)",
 				cfg.AWS.Region, cfg.AWS.Profile, cfg.AWS.PollInterval())
 		}
@@ -91,7 +116,7 @@ func runServer(ctx context.Context, cfg config.Config, logger *log.Logger) {
 				continue
 			}
 			clusters = append(clusters, server.Cluster{Name: cc.Name, Client: kc})
-			go k8s.NewCollector(cfg.Kubernetes, cc.Name, kc, st, logger).Run(ctx)
+			go k8s.NewCollector(cfg.Kubernetes, cc.Name, kc, st, inv, logger).Run(ctx)
 			logger.Printf("k8s(%s): collector started (poll=%s)", cc.Name, cfg.Kubernetes.PollInterval())
 		}
 	}
@@ -100,9 +125,16 @@ func runServer(ctx context.Context, cfg config.Config, logger *log.Logger) {
 		logger.Printf("WARNING: ingest_token is empty — /api/ingest is unauthenticated")
 	}
 
+	statusFn := func() map[string]any {
+		out := map[string]any{}
+		if awsCol != nil {
+			out["aws"] = awsCol.Status()
+		}
+		return out
+	}
 	srv := &http.Server{
 		Addr:    cfg.Listen,
-		Handler: server.New(st, ls, clusters, hist, cfg.IngestToken, web.FS, logger),
+		Handler: server.New(st, ls, inv, clusters, hist, statusFn, cfg.IngestToken, web.FS, logger),
 	}
 	go func() {
 		<-ctx.Done()
@@ -112,6 +144,13 @@ func runServer(ctx context.Context, cfg config.Config, logger *log.Logger) {
 	logger.Printf("dashboard listening on http://localhost%s", cfg.Listen)
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		logger.Fatal(err)
+	}
+	if sdb != nil {
+		select { // wait for the persister's final flush
+		case <-persistDone:
+		case <-time.After(3 * time.Second):
+		}
+		sdb.Close()
 	}
 	fmt.Fprintln(os.Stderr, "bye")
 }

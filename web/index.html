@@ -45,6 +45,7 @@
   }
   .tile:hover { background: var(--panel); color: var(--text); }
   .tile.active { background: var(--panel-2); color: var(--accent); border-color: var(--line); }
+  .tile.empty { opacity: .4; }
   .rail-sect { font-size: 9px; letter-spacing: .12em; color: var(--muted); text-transform: uppercase; margin: 8px 0 2px; }
 
   /* column 2: resource list */
@@ -188,6 +189,8 @@ const RING_SPAN = 6 * 3600;
 const MEMBER_CAP = 12;
 const PALETTE = ["#3fbfb4","#e8a33d","#9a7fdd","#d4537e","#5b9bd5","#97c459","#f09595","#b4b2a9","#6fbf73","#e25d4e","#c9d4e3","#8a6d3b"];
 const RANGES = [[1800,"30m"],[3600,"1h"],[10800,"3h"],[21600,"6h"],[86400,"24h"],[259200,"3d"],[604800,"7d"]];
+const BOOT_T = Date.now();
+const loadingOr = msg => (Date.now() - BOOT_T < 120000 ? "loading… collectors are warming up" : msg);
 const KIND_ORDER = ["Deployment","StatefulSet","DaemonSet","Job","CronJob","ReplicaSet","Rollout","Pod"];
 const KIND_PLURAL = {Deployment:"Deployments", StatefulSet:"StatefulSets", DaemonSet:"DaemonSets",
   Job:"Jobs", CronJob:"CronJobs", ReplicaSet:"ReplicaSets", Rollout:"Rollouts", Pod:"Pods"};
@@ -295,7 +298,7 @@ function buildRail() {
     const s = svcOf(meta);
     seen.set(s, (seen.get(s)||0) + 1);
   }
-  const svcs = [...seen.keys()].sort((a,b) => {
+  const svcs = [...new Set([...Object.keys(SVCMETA), ...seen.keys()])].sort((a,b) => {
     const oa = SVCMETA[a] ? SVCMETA[a].ord : 99, ob = SVCMETA[b] ? SVCMETA[b].ord : 99;
     return oa - ob || a.localeCompare(b);
   });
@@ -310,14 +313,18 @@ function buildRail() {
       d.className = "rail-sect"; d.textContent = sect;
       rail.appendChild(d);
     }
+    const n = seen.get(s) || 0;
     const b = document.createElement("button");
-    b.className = "tile" + (s === S.service ? " active" : "");
-    b.title = (SVCMETA[s] ? SVCMETA[s].title : s) + " · " + seen.get(s) + " series";
+    b.className = "tile" + (s === S.service ? " active" : "") + (n ? "" : " empty");
+    b.title = (SVCMETA[s] ? SVCMETA[s].title : s) + " · " + (n ? n + " series" : "loading…");
     b.textContent = SVCMETA[s] ? SVCMETA[s].abbr : s.slice(0, 4).toUpperCase();
     b.onclick = () => selectService(s);
     rail.appendChild(b);
   }
-  if (!S.service && svcs.length) selectService(svcs[0]);
+  if (!S.service) {
+    const withData = svcs.find(s => seen.get(s));
+    if (withData) selectService(withData);
+  }
 }
 
 function selectService(svc) {
@@ -476,7 +483,7 @@ function buildEKSNav() {
       });
     }
   }
-  if (!clusters.length) box.innerHTML = `<div class="empty" style="padding:30px 10px">no clusters yet\ncheck kubernetes.contexts config</div>`;
+  if (!clusters.length) box.innerHTML = `<div class="empty" style="padding:30px 10px">${loadingOr("no clusters yet - check kubernetes.contexts config")}</div>`;
 }
 
 // ---------------- time pills ----------------
@@ -663,7 +670,7 @@ function renderMain() {
   lb.onclick = hostLogs ? () => openAgentLogs(S.resource) : null;
 
   if (!groups.length) {
-    box.innerHTML = `<div class="empty">${hint || "no metrics here yet\n(collectors may still be warming up)"}</div>`;
+    box.innerHTML = `<div class="empty">${hint || loadingOr("no metrics here yet")}</div>`;
     return;
   }
   const grid = document.createElement("div");
@@ -824,23 +831,41 @@ document.getElementById("ressearch").addEventListener("input", e => { S.rsearch 
 document.getElementById("metricfilter").addEventListener("input", e => { S.mfilter = e.target.value.toLowerCase(); renderMain(); });
 
 // ---------------- boot ----------------
-async function boot() {
+async function refreshPods() {
   try {
-    const [series, pods] = await Promise.all([
-      fetch("/api/series").then(r => r.json()),
-      fetch("/api/pods").then(r => r.ok ? r.json() : []),
-    ]);
+    const pods = await fetch("/api/pods").then(r => r.ok ? r.json() : null);
+    if (pods) {
+      const had = S.pods.length;
+      S.pods = pods;
+      if (S.service === "EKS" && !S.rsearch) buildEKSNav();
+      if (!had && pods.length && S.service === "EKS") renderMain();
+      return pods.length;
+    }
+  } catch {}
+  return S.pods.length;
+}
+async function boot() {
+  // Paint immediately from the series list; pods fill in asynchronously.
+  try {
+    const series = await fetch("/api/series").then(r => r.json());
     for (const m of series) S.series.set(m.id, m);
-    S.pods = pods || [];
   } catch (e) { console.error(e); }
   buildRail();
   connectStream();
-  setInterval(async () => {
-    try {
-      S.pods = await fetch("/api/pods").then(r => r.ok ? r.json() : S.pods);
-      if (S.service === "EKS" && !S.rsearch) buildEKSNav();
-    } catch {}
-  }, 30000);
+  (async () => { // pods: quick retries while collectors warm up, then steady 30s
+    for (let i = 0; i < 4; i++) {
+      if (await refreshPods() > 0) break;
+      await new Promise(r => setTimeout(r, 4000));
+    }
+    setInterval(refreshPods, 30000);
+  })();
+  fetch("/api/status").then(r => r.json()).then(st => {
+    const aws = st && st.aws;
+    if (aws && aws.last_error) {
+      document.getElementById("dot").title = "aws collector: " + aws.last_error;
+      console.warn("aws collector:", aws.last_error);
+    }
+  }).catch(() => {});
 }
 boot();
 </script>
