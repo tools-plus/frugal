@@ -45,7 +45,7 @@
   }
   .tile:hover { background: var(--panel); color: var(--text); }
   .tile.active { background: var(--panel-2); color: var(--accent); border-color: var(--line); }
-  .tile.empty { opacity: .4; }
+  .tile.nodata { opacity: .4; }
   .rail-sect { font-size: 9px; letter-spacing: .12em; color: var(--muted); text-transform: uppercase; margin: 8px 0 2px; }
 
   /* column 2: resource list */
@@ -331,7 +331,7 @@ function buildRail() {
     const conf = svcConfigured(s);
     if (!n && conf === false) continue; // not collected: don't show a dead tile
     const b = document.createElement("button");
-    b.className = "tile" + (s === S.service ? " active" : "") + (n ? "" : " empty");
+    b.className = "tile" + (s === S.service ? " active" : "") + (n ? "" : " nodata");
     let state = n ? n + " series" : "loading…";
     if (!n && conf === null && s === "Hosts") state = "no agents reporting yet";
     if (!n && Date.now() - BOOT_T > 120000) state = "configured, but no data yet";
