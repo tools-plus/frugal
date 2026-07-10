@@ -550,10 +550,10 @@ function buildCtxFilters() {
     const nss = [...new Set(podsOf(sel.cluster, sel.kind).map(p => p.namespace))].sort();
     bar.append(mkSelect(nss.map(n => [n, n]), sel.ns, v => {
       const wls = [...new Set(podsOf(sel.cluster, sel.kind, v).map(p => p.workload || p.name))].sort();
-      select({...sel, ns: v, wl: wls[0] || "", pod: ""});
+      select({...sel, ns: v, wl: wls[0] || "", pod: "", view: "metrics"});
     }));
     const wls = [...new Set(podsOf(sel.cluster, sel.kind, sel.ns).map(p => p.workload || p.name))].sort();
-    bar.append(mkSelect(wls.map(w => [w, w]), sel.wl, v => select({...sel, wl: v, pod: ""})));
+    bar.append(mkSelect(wls.map(w => [w, w]), sel.wl, v => select({...sel, wl: v, pod: "", view: "metrics"})));
     const pods = podsOf(sel.cluster, sel.kind, sel.ns, sel.wl).sort((a,b) => a.name.localeCompare(b.name));
     bar.append(mkSelect([["", "All pods"], ...pods.map(p => [p.name, p.name])], sel.pod,
       v => select({...sel, pod: v, view: v ? sel.view : "metrics"})));
@@ -623,7 +623,7 @@ function renderMain() {
         return L.source === "k8s" && L.kind === "node" && L.cluster === sel.cluster
           && (!sel.node || L.node === sel.node);
       });
-      title = sel.cluster + " · " + (sel.node || "all nodes");
+      title = sel.cluster;
       groups = sel.node ? groupsByMetric(nm) : overlayGroups(nm, m => m.labels.node);
     } else if (sel.t === "kind") {
       const pm = metas.filter(m => {
@@ -632,7 +632,7 @@ function renderMain() {
           && L.namespace === sel.ns && (L.workload || L.pod) === sel.wl
           && (!sel.pod || L.pod === sel.pod);
       });
-      title = sel.cluster + " · " + sel.ns + " / " + sel.wl + (sel.pod ? " / " + sel.pod : "");
+      title = sel.cluster;
       if (sel.pod) {
         const info = S.pods.find(p => p.cluster === sel.cluster && p.namespace === sel.ns && p.name === sel.pod);
         phase = info ? info.phase : "";
