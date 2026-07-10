@@ -1,2 +1,4 @@
 .DS_Store
 awsobs-linux
+server.json
+agent.json
