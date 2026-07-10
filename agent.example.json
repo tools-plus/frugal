@@ -1,0 +1,9 @@
+{
+  "agent": {
+    "server_url": "http://10.0.1.10:8080",
+    "token": "CHANGE_ME_SHARED_INGEST_TOKEN",
+    "interval_seconds": 15,
+    "log_globs": ["/var/log/syslog", "/var/log/myapp/*.log"],
+    "kube_logs": false
+  }
+}

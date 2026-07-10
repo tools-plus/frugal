@@ -1,0 +1,53 @@
+# awsobs agent as an EKS DaemonSet: ships node host metrics + container
+# logs (/var/log/containers) to the awsobs server.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: awsobs-agent
+  namespace: awsobs
+stringData:
+  token: CHANGE_ME_SHARED_INGEST_TOKEN
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: awsobs-agent
+  namespace: awsobs
+spec:
+  selector:
+    matchLabels: { app: awsobs-agent }
+  template:
+    metadata:
+      labels: { app: awsobs-agent }
+    spec:
+      tolerations:
+        - operator: Exists   # run on every node, including tainted ones
+      containers:
+        - name: agent
+          image: YOUR_ECR_REPO/awsobs:latest
+          args: ["agent"]
+          env:
+            - name: AWSOBS_SERVER_URL
+              # in-cluster server; or http://<micro-ec2-ip>:8080 if outside
+              value: http://awsobs.awsobs.svc.cluster.local
+            - name: AWSOBS_TOKEN
+              valueFrom:
+                secretKeyRef: { name: awsobs-agent, key: token }
+            - name: AWSOBS_AGENT_KUBELOGS
+              value: "true"
+            - name: AWSOBS_HOSTNAME
+              valueFrom:
+                fieldRef: { fieldPath: spec.nodeName }
+          resources:
+            requests: { cpu: 20m, memory: 32Mi }
+            limits: { memory: 128Mi }
+          volumeMounts:
+            - { name: varlog, mountPath: /var/log, readOnly: true }
+            # container log symlink targets live under /var/lib/docker or
+            # /var/log/pods depending on runtime; containerd uses /var/log/pods
+            - { name: pods, mountPath: /var/log/pods, readOnly: true }
+          securityContext:
+            readOnlyRootFilesystem: true
+      volumes:
+        - { name: varlog, hostPath: { path: /var/log } }
+        - { name: pods, hostPath: { path: /var/log/pods } }

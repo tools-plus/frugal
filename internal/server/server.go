@@ -6,15 +6,19 @@ package server
 import (
 	"bufio"
 	"context"
+	"crypto/subtle"
 	"embed"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/example/awsobs/internal/k8s"
+	"github.com/example/awsobs/internal/logstore"
 	"github.com/example/awsobs/internal/store"
 )
 
@@ -25,16 +29,18 @@ type Historian interface {
 }
 
 type Server struct {
-	store  *store.Store
-	k8s    *k8s.Client // nil when kubernetes collection is disabled
-	hist   Historian   // nil when the AWS collector is disabled
-	logger *log.Logger
-	assets embed.FS
-	mux    *http.ServeMux
+	store       *store.Store
+	logs        *logstore.Store
+	k8s         *k8s.Client // nil when kubernetes collection is disabled
+	hist        Historian   // nil when the AWS collector is disabled
+	ingestToken string
+	logger      *log.Logger
+	assets      embed.FS
+	mux         *http.ServeMux
 }
 
-func New(st *store.Store, kc *k8s.Client, hist Historian, assets embed.FS, logger *log.Logger) *Server {
-	s := &Server{store: st, k8s: kc, hist: hist, logger: logger, assets: assets}
+func New(st *store.Store, ls *logstore.Store, kc *k8s.Client, hist Historian, ingestToken string, assets embed.FS, logger *log.Logger) *Server {
+	s := &Server{store: st, logs: ls, k8s: kc, hist: hist, ingestToken: ingestToken, logger: logger, assets: assets}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", s.handleIndex)
 	mux.HandleFunc("GET /api/series", s.handleSeries)
@@ -43,6 +49,9 @@ func New(st *store.Store, kc *k8s.Client, hist Historian, assets embed.FS, logge
 	mux.HandleFunc("GET /api/stream", s.handleStream)
 	mux.HandleFunc("GET /api/pods", s.handlePods)
 	mux.HandleFunc("GET /api/logs", s.handleLogs)
+	mux.HandleFunc("GET /api/agentlogs", s.handleAgentLogs)
+	mux.HandleFunc("POST /api/ingest", s.auth(s.handleIngest))
+	mux.HandleFunc("POST /api/ingest/logs", s.auth(s.handleIngestLogs))
 	s.mux = mux
 	return s
 }
@@ -169,12 +178,14 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 // GET /api/logs?namespace=default&pod=web-abc&container=app&tail=200
 // Streams pod logs as SSE `log` events, one per line.
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
-	if s.k8s == nil {
-		http.Error(w, "kubernetes collection disabled", http.StatusServiceUnavailable)
-		return
-	}
 	q := r.URL.Query()
 	ns, pod := q.Get("namespace"), q.Get("pod")
+	if s.k8s == nil {
+		// Fall back to logs shipped by the DaemonSet agent, if any.
+		r.URL.RawQuery = "source=" + url.QueryEscape("pod/"+ns+"/"+pod) + "&tail=" + q.Get("tail")
+		s.handleAgentLogs(w, r)
+		return
+	}
 	if ns == "" || pod == "" {
 		http.Error(w, "namespace and pod required", http.StatusBadRequest)
 		return
@@ -207,6 +218,103 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	fmt.Fprint(w, "event: eof\ndata: {}\n\n")
 	fl.Flush()
+}
+
+// auth guards the push endpoints with the shared ingest token.
+func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.ingestToken != "" {
+			got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+			if subtle.ConstantTimeCompare([]byte(got), []byte(s.ingestToken)) != 1 {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+		}
+		next(w, r)
+	}
+}
+
+type ingestPoint struct {
+	ID     string            `json:"id"`
+	Labels map[string]string `json:"labels"`
+	Point  store.Point       `json:"point"`
+}
+
+// POST /api/ingest — agents push metric points.
+func (s *Server) handleIngest(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Batch []ingestPoint `json:"batch"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<20)).Decode(&body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	for _, p := range body.Batch {
+		if p.ID == "" || p.Labels == nil {
+			continue
+		}
+		s.store.Add(p.ID, p.Labels, p.Point)
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// POST /api/ingest/logs — agents push log lines.
+func (s *Server) handleIngestLogs(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Source string   `json:"source"`
+		Lines  []string `json:"lines"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<20)).Decode(&body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if body.Source == "" || len(body.Lines) == 0 {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	s.logs.Append(body.Source, body.Lines)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// GET /api/agentlogs?source=host/ip-10-0-1-5&tail=200 — SSE tail + follow
+// of logs shipped by agents.
+func (s *Server) handleAgentLogs(w http.ResponseWriter, r *http.Request) {
+	source := r.URL.Query().Get("source")
+	if source == "" {
+		http.Error(w, "source required", http.StatusBadRequest)
+		return
+	}
+	tail, _ := strconv.Atoi(r.URL.Query().Get("tail"))
+	if tail <= 0 {
+		tail = 200
+	}
+	fl, ok := sseHeaders(w)
+	if !ok {
+		return
+	}
+	ch, cancel := s.logs.Subscribe()
+	defer cancel()
+	for _, line := range s.logs.Tail(source, tail) {
+		fmt.Fprintf(w, "event: log\ndata: %s\n\n", jsonString(line))
+	}
+	fl.Flush()
+	heartbeat := time.NewTicker(20 * time.Second)
+	defer heartbeat.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-heartbeat.C:
+			fmt.Fprint(w, ": ping\n\n")
+			fl.Flush()
+		case l := <-ch:
+			if l.Source != source {
+				continue
+			}
+			fmt.Fprintf(w, "event: log\ndata: %s\n\n", jsonString(l.Text))
+			fl.Flush()
+		}
+	}
 }
 
 func jsonString(s string) string {

@@ -1,6 +1,11 @@
 # awsobs
 
-A single-binary AWS + EKS observability tool. Collects CloudWatch metrics for
+A single-binary AWS + EKS observability tool with two modes:
+
+```
+awsobs server   # collectors + dashboard (default when no subcommand given)
+awsobs agent    # push host metrics + logs from EC2 / EKS nodes to a server
+``` Collects CloudWatch metrics for
 managed services (EC2, RDS, DocumentDB, ElastiCache/Valkey, AmazonMQ ActiveMQ +
 RabbitMQ, OpenSearch, S3, ALB, NLB, EKS control plane, Container Insights) and live pod/node CPU + memory from an EKS cluster, streams pod logs, and
 serves a live dashboard — no Prometheus, no agents, no external database.
@@ -10,6 +15,43 @@ CloudWatch API ─┐
                 ├─▶ collector ─▶ in-memory ring buffers ─▶ HTTP + SSE ─▶ live dashboard
 EKS APIs ───────┘     (Go)         (recent history)                       (embedded HTML)
 ```
+
+## Hybrid collection (why this is cheap)
+
+The server prefers **native, free endpoints** over CloudWatch wherever they
+exist, and uses CloudWatch (default 300s poll) only for what has no
+alternative:
+
+| Source | How | Cost | Resolution |
+|---|---|---|---|
+| Valkey / ElastiCache | `INFO` over the redis protocol | free | seconds |
+| OpenSearch | `_cluster/health`, `_nodes/stats` | free | seconds |
+| AmazonMQ (RabbitMQ) | management HTTP API | free | seconds |
+| EC2 / hosts | `awsobs agent` reading /proc, pushed | free | seconds |
+| EKS pods/nodes | metrics-server + kubelet log API | free | ~15s |
+| ALB / NLB / S3 / RDS / DocDB host CPU+RAM / EKS control plane | CloudWatch `GetMetricData` | $0.01 / 1k metrics | 300s default |
+
+RDS/DocDB stay on CloudWatch because instance CPU/memory isn't reachable
+any other way; SQL-level pollers (connections, cache hit ratios) are a
+planned add-on.
+
+## Agent mode
+
+Agents push to `POST /api/ingest` (metrics) and `/api/ingest/logs` (log
+lines) with a shared bearer token (`ingest_token` on the server, `token` on
+the agent). They collect host CPU / memory / disk / network / load from
+/proc, tail configured log globs, buffer while the server is unreachable,
+and on Kubernetes nodes (`kube_logs: true`) ship every container's logs
+from `/var/log/containers` — attributed to `pod/<namespace>/<pod>` so the
+dashboard's pod log view works even when the server runs outside the
+cluster.
+
+- **EC2**: `deploy/awsobs-agent.service` (systemd unit)
+- **EKS**: `deploy/agent-daemonset.yaml` (DaemonSet, every node)
+- Config: `agent.example.json`, or env `AWSOBS_SERVER_URL` + `AWSOBS_TOKEN`
+
+Traces are out of scope for now; the natural path is an OTLP ingest
+endpoint on the server — planned.
 
 ## Quick start (local, 2 minutes)
 
@@ -96,7 +138,10 @@ Keep it behind port-forward, your VPN, or an authenticating ingress.
 | `GET /api/history?id=&from=&to=` | on-demand CloudWatch fetch for long ranges (unix seconds) |
 | `GET /api/stream` | SSE: every new point, as it lands |
 | `GET /api/pods` | pod inventory |
-| `GET /api/logs?namespace=&pod=&container=&tail=` | SSE: live log tail |
+| `GET /api/logs?namespace=&pod=&container=&tail=` | SSE: live pod log tail (k8s API, or agent-shipped fallback) |
+| `GET /api/agentlogs?source=host/<name>&tail=` | SSE: live tail of agent-shipped logs |
+| `POST /api/ingest` | agent metric push (bearer token) |
+| `POST /api/ingest/logs` | agent log push (bearer token) |
 
 Series IDs are pipe-delimited and predictable:
 `k8s|pod|default/web-7f9c|cpu_cores`, `cw|RDS|CPUUtilization|mydb`.

@@ -1,0 +1,26 @@
+{
+  "listen": ":8080",
+  "ingest_token": "CHANGE_ME_SHARED_INGEST_TOKEN",
+  "retention_points": 720,
+  "log_retention_lines": 2000,
+  "aws": {
+    "enabled": true,
+    "region": "ap-south-1",
+    "profile": "",
+    "namespaces": ["AWS/RDS", "AWS/DocDB", "AWS/S3", "AWS/ApplicationELB", "AWS/NetworkELB", "AWS/EKS"],
+    "poll_interval_seconds": 300
+  },
+  "kubernetes": { "enabled": true, "poll_interval_seconds": 15 },
+  "native": {
+    "poll_interval_seconds": 15,
+    "valkey": [
+      { "name": "dev-valkey-001", "addr": "dev-valkey-001.xxxxxx.0001.aps1.cache.amazonaws.com:6379", "password": "", "tls": true }
+    ],
+    "opensearch": [
+      { "name": "logs-domain", "url": "https://vpc-logs-xxxxxx.ap-south-1.es.amazonaws.com", "username": "admin", "password": "" }
+    ],
+    "rabbitmq": [
+      { "name": "broker-1", "url": "https://b-xxxxxx.mq.ap-south-1.amazonaws.com", "username": "admin", "password": "" }
+    ]
+  }
+}

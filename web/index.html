@@ -182,6 +182,7 @@ const RANGES = [[1800,"30m"],[3600,"1h"],[10800,"3h"],[21600,"6h"],[86400,"24h"]
 const SVCMETA = {
   "Pods":        {abbr:"PODS", title:"EKS pods (live)", k8s:true,  ord:0},
   "Nodes":       {abbr:"NODE", title:"EKS nodes (live)", k8s:true, ord:1},
+  "Hosts":       {abbr:"HOST", title:"Host agents (EC2 / VMs)", k8s:true, ord:1.5},
   "EKS":         {abbr:"EKS",  title:"EKS control plane", ord:2},
   "EC2":         {abbr:"EC2",  title:"EC2 instances", ord:3},
   "RDS":         {abbr:"RDS",  title:"RDS databases", ord:4},
@@ -200,6 +201,8 @@ const NS2SVC = {EC2:"EC2", RDS:"RDS", DocDB:"DocDB", ElastiCache:"Valkey", Amazo
 function svcOf(meta) {
   const L = meta.labels || {};
   if (L.source === "k8s") return L.kind === "pod" ? "Pods" : "Nodes";
+  if (L.source === "agent") return "Hosts";
+  if (L.source === "native") return L.svc || "Native";
   const ns = (L.namespace || "").replace("AWS/", "");
   return NS2SVC[ns] || ns || "Other";
 }
@@ -370,8 +373,9 @@ async function renderCharts() {
   const ph = document.getElementById("rphase");
   ph.textContent = info ? info.phase : ""; ph.className = "phase " + (info ? info.phase : "");
   const lb = document.getElementById("logsbtn");
-  lb.style.display = info ? "" : "none";
-  lb.onclick = info ? () => openLogs(info) : null;
+  const isHost = S.service === "Hosts" && S.resource;
+  lb.style.display = (info || isHost) ? "" : "none";
+  lb.onclick = info ? () => openLogs(info) : (isHost ? () => openAgentLogs(S.resource) : null);
 
   if (!S.resource) { box.innerHTML = `<div class="empty">no resources found in this service yet</div>`; return; }
 
@@ -491,10 +495,13 @@ setInterval(() => {
 // ---------------- logs drawer ----------------
 let logES = null;
 function startLogStream(pod, container) {
+  startLogURL(`/api/logs?namespace=${encodeURIComponent(pod.namespace)}&pod=${encodeURIComponent(pod.name)}&container=${encodeURIComponent(container||"")}&tail=200`);
+}
+function startLogURL(url) {
   if (logES) logES.close();
   const lines = document.getElementById("loglines");
   lines.textContent = "";
-  logES = new EventSource(`/api/logs?namespace=${encodeURIComponent(pod.namespace)}&pod=${encodeURIComponent(pod.name)}&container=${encodeURIComponent(container||"")}&tail=200`);
+  logES = new EventSource(url);
   const push = txt => {
     const sp = txt.indexOf(" ");
     const div = document.createElement("div");
@@ -507,6 +514,12 @@ function startLogStream(pod, container) {
   logES.addEventListener("log", ev => push(JSON.parse(ev.data)));
   logES.addEventListener("error", ev => { if (ev.data) push("!! " + JSON.parse(ev.data)); });
   logES.addEventListener("eof", () => push("-- log stream ended --"));
+}
+function openAgentLogs(host) {
+  document.getElementById("logname").textContent = host;
+  document.getElementById("logcontainer").style.display = "none";
+  document.getElementById("drawer").classList.add("open");
+  startLogURL(`/api/agentlogs?source=${encodeURIComponent("host/" + host)}&tail=200`);
 }
 function openLogs(pod) {
   document.getElementById("logname").textContent = pod.namespace + "/" + pod.name;
