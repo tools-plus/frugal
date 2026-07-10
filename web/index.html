@@ -1,0 +1,552 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>awsobs — live infrastructure</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://unpkg.com/uplot@1.6.30/dist/uPlot.min.css">
+<script src="https://unpkg.com/uplot@1.6.30/dist/uPlot.iife.min.js"></script>
+<style>
+  :root {
+    --bg: #0f141b; --panel: #151c26; --panel-2: #1a2330;
+    --line: #232d3b; --text: #c9d4e3; --muted: #6b7a8f;
+    --accent: #3fbfb4; --warn: #e8a33d; --ok: #6fbf73; --bad: #e25d4e;
+    --mono: "IBM Plex Mono", ui-monospace, monospace;
+    --sans: "IBM Plex Sans", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 var(--sans); overflow: hidden; }
+  input, button { font-family: inherit; }
+
+  header {
+    display: flex; align-items: center; gap: 16px; height: 46px;
+    padding: 0 16px; border-bottom: 1px solid var(--line);
+  }
+  header h1 { font-size: 14px; font-weight: 600; margin: 0; letter-spacing: .04em; }
+  header h1 span { color: var(--muted); font-weight: 400; }
+  .live { display: flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11px; color: var(--muted); margin-left: auto; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--bad); }
+  .dot.on { background: var(--ok); }
+  @media (prefers-reduced-motion: no-preference) { .dot.on { animation: pulse 2s infinite; } }
+  @keyframes pulse { 50% { opacity: .35; } }
+
+  .layout { display: grid; grid-template-columns: 64px 250px 1fr; height: calc(100vh - 47px); }
+
+  /* column 1: service rail */
+  #rail { border-right: 1px solid var(--line); padding: 10px 0; overflow-y: auto; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+  .tile {
+    width: 46px; height: 40px; border-radius: 8px; border: 1px solid transparent;
+    background: none; color: var(--muted); cursor: pointer;
+    font: 500 10px/1.1 var(--mono); letter-spacing: .03em;
+    display: flex; align-items: center; justify-content: center; text-align: center; padding: 2px;
+  }
+  .tile:hover { background: var(--panel); color: var(--text); }
+  .tile.active { background: var(--panel-2); color: var(--accent); border-color: var(--line); }
+  .rail-sect { font-size: 9px; letter-spacing: .12em; color: var(--muted); text-transform: uppercase; margin: 8px 0 2px; }
+
+  /* column 2: resource list */
+  #reslist { border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+  #reslist .hd { padding: 10px 12px 8px; border-bottom: 1px solid var(--line); }
+  #reslist .hd .svc { font-weight: 600; font-size: 13px; }
+  #reslist .hd .cnt { color: var(--muted); font-family: var(--mono); font-size: 11px; margin-left: 6px; }
+  #ressearch {
+    width: 100%; margin-top: 8px; background: var(--panel); border: 1px solid var(--line);
+    color: var(--text); border-radius: 6px; padding: 5px 9px; font: 12px var(--mono);
+  }
+  #ressearch:focus, #metricfilter:focus { outline: 1px solid var(--accent); }
+  #resitems { overflow-y: auto; flex: 1; padding: 6px; }
+  .res {
+    display: flex; align-items: center; gap: 8px; width: 100%;
+    background: none; border: 0; color: var(--text); text-align: left; cursor: pointer;
+    padding: 7px 10px; border-radius: 6px; font-size: 12.5px;
+  }
+  .res:hover { background: var(--panel); }
+  .res.active { background: var(--panel-2); }
+  .res .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+  .res .meta { font-family: var(--mono); font-size: 10px; color: var(--muted); }
+  .pdot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+  .pdot.Running { background: var(--ok); } .pdot.Pending { background: var(--warn); }
+  .pdot.Failed, .pdot.Unknown { background: var(--bad); } .pdot.Succeeded { background: var(--muted); }
+
+  /* column 3: main */
+  #main { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+  #mainbar {
+    display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+    padding: 10px 16px; border-bottom: 1px solid var(--line);
+  }
+  #mainbar .rname { font-weight: 600; font-size: 13.5px; max-width: 34ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #mainbar .phase { font: 11px var(--mono); }
+  #mainbar .phase.Running { color: var(--ok); } #mainbar .phase.Pending { color: var(--warn); }
+  #mainbar .phase.Failed { color: var(--bad); }
+  #logsbtn {
+    background: var(--panel-2); border: 1px solid var(--line); color: var(--muted);
+    border-radius: 5px; font-size: 11px; padding: 3px 10px; cursor: pointer; display: none;
+  }
+  #logsbtn:hover { color: var(--text); border-color: var(--muted); }
+  #metricfilter {
+    margin-left: auto; background: var(--panel); border: 1px solid var(--line);
+    color: var(--text); border-radius: 6px; padding: 5px 10px; width: 200px; font: 12px var(--mono);
+  }
+  .pills { display: flex; gap: 2px; background: var(--panel); border: 1px solid var(--line); border-radius: 7px; padding: 2px; }
+  .pill { background: none; border: 0; color: var(--muted); font: 11px var(--mono); padding: 4px 9px; border-radius: 5px; cursor: pointer; }
+  .pill:hover { color: var(--text); }
+  .pill.active { background: var(--panel-2); color: var(--accent); }
+  .pill.hidden { display: none; }
+
+  #charts { overflow-y: auto; flex: 1; padding: 14px 16px 40px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(430px, 1fr)); gap: 12px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px 6px; }
+  .card .hd { display: flex; align-items: baseline; gap: 10px; margin-bottom: 2px; }
+  .card .title { font-weight: 500; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .card .val { margin-left: auto; font-family: var(--mono); font-size: 12px; color: var(--accent); white-space: nowrap; }
+  .card .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 4px 0 2px; font: 10.5px var(--mono); color: var(--muted); }
+  .card .legend .sw { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
+  .card .nodata { color: var(--muted); font: 12px var(--mono); padding: 40px 0; text-align: center; }
+  .empty { color: var(--muted); padding: 70px 20px; text-align: center; font: 13px var(--mono); white-space: pre-line; }
+  .u-legend { display: none; }
+
+  #drawer {
+    position: fixed; left: 0; right: 0; bottom: 0; height: 42vh;
+    background: #0b0f15; border-top: 1px solid var(--line); display: none;
+    flex-direction: column; z-index: 10;
+  }
+  #drawer.open { display: flex; }
+  #drawer .bar { display: flex; align-items: center; gap: 12px; padding: 8px 16px; border-bottom: 1px solid var(--line); }
+  #drawer .bar .name { font: 12px var(--mono); color: var(--accent); }
+  #drawer .bar select { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 5px; font: 11px var(--mono); padding: 2px 6px; }
+  #drawer .bar button { margin-left: auto; background: none; border: 1px solid var(--line); color: var(--muted); border-radius: 5px; padding: 3px 10px; cursor: pointer; font-size: 12px; }
+  #loglines { flex: 1; overflow-y: auto; margin: 0; padding: 10px 16px; font: 12px/1.6 var(--mono); color: #a8b6c8; white-space: pre-wrap; word-break: break-all; }
+  #loglines .ts { color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>awsobs <span>/ live infrastructure</span></h1>
+  <div class="live"><div class="dot" id="dot"></div><span id="rate">connecting…</span></div>
+</header>
+
+<div class="layout">
+  <nav id="rail"></nav>
+  <div id="reslist">
+    <div class="hd">
+      <span class="svc" id="svcname">—</span><span class="cnt" id="svccnt"></span>
+      <input id="ressearch" placeholder="search…">
+    </div>
+    <div id="resitems"></div>
+  </div>
+  <div id="main">
+    <div id="mainbar">
+      <span class="rname" id="rname">select a resource</span>
+      <span class="phase" id="rphase"></span>
+      <button id="logsbtn">logs</button>
+      <input id="metricfilter" placeholder="filter metrics…">
+      <div class="pills" id="pills"></div>
+    </div>
+    <div id="charts"><div class="empty">pick a service on the left rail</div></div>
+  </div>
+</div>
+
+<div id="drawer">
+  <div class="bar">
+    <span class="name" id="logname"></span>
+    <select id="logcontainer"></select>
+    <label style="font-size:12px;color:var(--muted)"><input type="checkbox" id="follow" checked> follow</label>
+    <button id="closelog">Close</button>
+  </div>
+  <pre id="loglines"></pre>
+</div>
+
+<script>
+"use strict";
+// ---------------- state ----------------
+const S = {
+  series: new Map(),      // id -> meta {id, labels}
+  data: new Map(),        // id -> Map(t -> v)  (ring + history + live merged)
+  ringLoaded: new Set(),  // ids whose ring buffer was fetched
+  histRange: new Map(),   // id -> largest history range (secs) fetched
+  charts: [],             // [{u, metric, members:[{id,variant,color}], card, valEl}]
+  dirty: new Set(),       // chart indexes needing redraw
+  pods: [],
+  service: null, resource: null,
+  range: 3600, mfilter: "", rsearch: "",
+  events: 0,
+};
+const RING_SPAN = 6 * 3600;
+const PALETTE = ["#3fbfb4","#e8a33d","#9a7fdd","#d4537e","#5b9bd5","#97c459","#f09595","#b4b2a9"];
+const RANGES = [[1800,"30m"],[3600,"1h"],[10800,"3h"],[21600,"6h"],[86400,"24h"],[259200,"3d"],[604800,"7d"]];
+
+// ---------------- services ----------------
+const SVCMETA = {
+  "Pods":        {abbr:"PODS", title:"EKS pods (live)", k8s:true,  ord:0},
+  "Nodes":       {abbr:"NODE", title:"EKS nodes (live)", k8s:true, ord:1},
+  "EKS":         {abbr:"EKS",  title:"EKS control plane", ord:2},
+  "EC2":         {abbr:"EC2",  title:"EC2 instances", ord:3},
+  "RDS":         {abbr:"RDS",  title:"RDS databases", ord:4},
+  "DocDB":       {abbr:"DOC",  title:"DocumentDB", ord:5},
+  "Valkey":      {abbr:"VLK",  title:"Valkey / ElastiCache", ord:6},
+  "MQ":          {abbr:"MQ",   title:"AmazonMQ brokers", ord:7},
+  "OpenSearch":  {abbr:"OS",   title:"OpenSearch domains", ord:8},
+  "S3":          {abbr:"S3",   title:"S3 buckets", ord:9},
+  "ALB":         {abbr:"ALB",  title:"Application load balancers", ord:10},
+  "NLB":         {abbr:"NLB",  title:"Network load balancers", ord:11},
+  "Insights":    {abbr:"CI",   title:"Container Insights", ord:12},
+};
+const NS2SVC = {EC2:"EC2", RDS:"RDS", DocDB:"DocDB", ElastiCache:"Valkey", AmazonMQ:"MQ",
+  ES:"OpenSearch", S3:"S3", ApplicationELB:"ALB", NetworkELB:"NLB", EKS:"EKS", ContainerInsights:"Insights"};
+
+function svcOf(meta) {
+  const L = meta.labels || {};
+  if (L.source === "k8s") return L.kind === "pod" ? "Pods" : "Nodes";
+  const ns = (L.namespace || "").replace("AWS/", "");
+  return NS2SVC[ns] || ns || "Other";
+}
+const isK8sSvc = svc => !!(SVCMETA[svc] && SVCMETA[svc].k8s);
+
+// ---------------- formatting ----------------
+const fmtBytes = v => {
+  if (v == null || isNaN(v)) return "–";
+  const u = ["B","KiB","MiB","GiB","TiB"]; let i = 0;
+  while (Math.abs(v) >= 1024 && i < u.length-1) { v /= 1024; i++; }
+  return v.toFixed(Math.abs(v) >= 100 ? 0 : 1) + " " + u[i];
+};
+const fmtCores = v => v == null || isNaN(v) ? "–" : (v < 1 ? Math.round(v*1000) + "m" : v.toFixed(2));
+const fmtSecs = v => v == null || isNaN(v) ? "–" : (v < 0.001 ? (v*1e6).toFixed(0)+"µs" : v < 1 ? (v*1000).toFixed(1)+"ms" : v.toFixed(2)+"s");
+const fmtPct = v => v == null || isNaN(v) ? "–" : v.toFixed(1)+"%";
+const fmtNum = v => {
+  if (v == null || isNaN(v)) return "–";
+  if (Math.abs(v) >= 1e9) return (v/1e9).toFixed(1)+"G";
+  if (Math.abs(v) >= 1e6) return (v/1e6).toFixed(1)+"M";
+  if (Math.abs(v) >= 1e3) return (v/1e3).toFixed(1)+"k";
+  return Math.abs(v) < 10 && v !== Math.round(v) ? v.toFixed(2) : String(Math.round(v));
+};
+function metricFmt(name) {
+  if (name === "cpu_cores") return fmtCores;
+  if (/memory_bytes|Memory|Bytes|Storage|MemUsed|MemLimit|DiskFree/i.test(name)) return fmtBytes;
+  if (/Latency|ResponseTime/i.test(name)) return fmtSecs;
+  if (/Utilization|Percentage|Pressure|Ratio/i.test(name)) return fmtPct;
+  return fmtNum;
+}
+
+// ---------------- data plumbing ----------------
+async function ensureRing(id) {
+  if (S.ringLoaded.has(id)) return;
+  S.ringLoaded.add(id);
+  const pts = await fetch("/api/series/data?id=" + encodeURIComponent(id)).then(r => r.json()).catch(() => []);
+  const m = S.data.get(id) || new Map();
+  for (const p of pts) m.set(p.t, p.v);
+  S.data.set(id, m);
+}
+async function ensureHistory(id, range) {
+  if (range <= RING_SPAN) return;
+  const meta = S.series.get(id);
+  if (!meta || (meta.labels||{}).source !== "cloudwatch") return;
+  if ((S.histRange.get(id) || 0) >= range) return;
+  S.histRange.set(id, range);
+  const now = Math.floor(Date.now()/1000);
+  const pts = await fetch(`/api/history?id=${encodeURIComponent(id)}&from=${now-range}&to=${now}`)
+    .then(r => r.ok ? r.json() : []).catch(() => []);
+  const m = S.data.get(id) || new Map();
+  for (const p of pts) m.set(p.t, p.v);
+  S.data.set(id, m);
+}
+function windowed(ids) { // compose uPlot data for member ids within range
+  const now = Math.floor(Date.now()/1000), from = now - S.range;
+  const xset = new Set();
+  for (const id of ids) {
+    const m = S.data.get(id);
+    if (m) for (const t of m.keys()) if (t >= from) xset.add(t);
+  }
+  const xs = [...xset].sort((a,b) => a-b);
+  const cols = ids.map(id => {
+    const m = S.data.get(id) || new Map();
+    return xs.map(t => m.has(t) ? m.get(t) : null);
+  });
+  return [xs, ...cols];
+}
+
+// ---------------- rail ----------------
+function buildRail() {
+  const seen = new Map();
+  for (const meta of S.series.values()) {
+    const s = svcOf(meta);
+    seen.set(s, (seen.get(s)||0) + 1);
+  }
+  const svcs = [...seen.keys()].sort((a,b) => {
+    const oa = SVCMETA[a] ? SVCMETA[a].ord : 99, ob = SVCMETA[b] ? SVCMETA[b].ord : 99;
+    return oa - ob || a.localeCompare(b);
+  });
+  const rail = document.getElementById("rail");
+  rail.innerHTML = "";
+  let sect = null;
+  for (const s of svcs) {
+    const want = isK8sSvc(s) ? "live" : "aws";
+    if (sect !== want) {
+      sect = want;
+      const d = document.createElement("div");
+      d.className = "rail-sect"; d.textContent = sect;
+      rail.appendChild(d);
+    }
+    const b = document.createElement("button");
+    b.className = "tile" + (s === S.service ? " active" : "");
+    b.title = (SVCMETA[s] ? SVCMETA[s].title : s) + " · " + seen.get(s) + " series";
+    b.textContent = SVCMETA[s] ? SVCMETA[s].abbr : s.slice(0, 4).toUpperCase();
+    b.onclick = () => selectService(s);
+    rail.appendChild(b);
+  }
+  if (!S.service && svcs.length) selectService(svcs[0]);
+}
+
+// ---------------- resource list ----------------
+function resourcesOf(svc) {
+  const map = new Map(); // resource -> series count
+  for (const meta of S.series.values()) {
+    if (svcOf(meta) !== svc) continue;
+    const r = (meta.labels||{}).resource || "_aggregate";
+    map.set(r, (map.get(r)||0) + 1);
+  }
+  return [...map.entries()].sort((a,b) => a[0].localeCompare(b[0]));
+}
+function selectService(svc) {
+  S.service = svc; S.resource = null; S.rsearch = "";
+  document.getElementById("ressearch").value = "";
+  buildRail(); buildResList();
+  const items = resourcesOf(svc);
+  if (items.length) selectResource(items[0][0]); else renderCharts();
+}
+function buildResList() {
+  const items = resourcesOf(S.service).filter(([r]) => !S.rsearch || r.toLowerCase().includes(S.rsearch));
+  document.getElementById("svcname").textContent = SVCMETA[S.service] ? SVCMETA[S.service].title : (S.service||"—");
+  document.getElementById("svccnt").textContent = items.length;
+  const box = document.getElementById("resitems");
+  box.innerHTML = "";
+  const podInfo = new Map(S.pods.map(p => [p.namespace + "/" + p.name, p]));
+  for (const [r, n] of items) {
+    const b = document.createElement("button");
+    b.className = "res" + (r === S.resource ? " active" : "");
+    const info = S.service === "Pods" ? podInfo.get(r) : null;
+    const dot = info ? `<span class="pdot ${info.phase}"></span>` : "";
+    const meta = info && info.restarts ? `↻${info.restarts}` : `${n}`;
+    b.innerHTML = `${dot}<span class="nm">${r === "_aggregate" ? "(aggregate)" : r}</span><span class="meta">${meta}</span>`;
+    b.onclick = () => selectResource(r);
+    box.appendChild(b);
+  }
+}
+function selectResource(r) {
+  S.resource = r;
+  buildResList();
+  renderCharts();
+}
+
+// ---------------- time pills ----------------
+function buildPills() {
+  const box = document.getElementById("pills");
+  box.innerHTML = "";
+  for (const [secs, label] of RANGES) {
+    const b = document.createElement("button");
+    b.className = "pill" + (secs === S.range ? " active" : "")
+      + (isK8sSvc(S.service) && secs > RING_SPAN ? " hidden" : "");
+    b.textContent = label;
+    b.onclick = () => { S.range = secs; renderCharts(); };
+    box.appendChild(b);
+  }
+}
+
+// ---------------- charts ----------------
+const axisStyle = { stroke: "#6b7a8f", grid: {stroke: "#1c2531", width: 1}, ticks: {stroke: "#1c2531"} };
+
+async function renderCharts() {
+  buildPills();
+  for (const c of S.charts) c.u && c.u.destroy();
+  S.charts = []; S.dirty.clear();
+  const box = document.getElementById("charts");
+  box.innerHTML = "";
+
+  // main bar
+  document.getElementById("rname").textContent = S.resource ? (S.resource === "_aggregate" ? "(aggregate)" : S.resource) : "select a resource";
+  const info = S.service === "Pods" ? S.pods.find(p => p.namespace + "/" + p.name === S.resource) : null;
+  const ph = document.getElementById("rphase");
+  ph.textContent = info ? info.phase : ""; ph.className = "phase " + (info ? info.phase : "");
+  const lb = document.getElementById("logsbtn");
+  lb.style.display = info ? "" : "none";
+  lb.onclick = info ? () => openLogs(info) : null;
+
+  if (!S.resource) { box.innerHTML = `<div class="empty">no resources found in this service yet</div>`; return; }
+
+  // group series by metric
+  const byMetric = new Map();
+  for (const meta of S.series.values()) {
+    const L = meta.labels || {};
+    if (svcOf(meta) !== S.service) continue;
+    if ((L.resource || "_aggregate") !== S.resource) continue;
+    if (S.mfilter && !(L.metric||"").toLowerCase().includes(S.mfilter)) continue;
+    if (!byMetric.has(L.metric)) byMetric.set(L.metric, []);
+    byMetric.get(L.metric).push(meta);
+  }
+  const metrics = [...byMetric.keys()].sort();
+  if (!metrics.length) {
+    box.innerHTML = `<div class="empty">no metrics match\n(collectors may still be warming up)</div>`;
+    return;
+  }
+  const grid = document.createElement("div");
+  grid.className = "grid";
+  box.appendChild(grid);
+
+  const gen = renderCharts.gen = (renderCharts.gen||0) + 1;
+  for (const metric of metrics) {
+    const metas = byMetric.get(metric).sort((a,b) => ((a.labels.variant||"")).localeCompare(b.labels.variant||"")).slice(0, 8);
+    const members = metas.map((m, i) => ({id: m.id, variant: m.labels.variant || m.labels.stat || "", color: PALETTE[i % PALETTE.length]}));
+    const fmt = metricFmt(metric);
+
+    const card = document.createElement("div");
+    card.className = "card";
+    card.innerHTML = `<div class="hd"><span class="title">${metric}</span><span class="val">–</span></div><div class="plot"></div>`;
+    if (members.length > 1) {
+      const lg = document.createElement("div");
+      lg.className = "legend";
+      lg.innerHTML = members.map(m => `<span><span class="sw" style="background:${m.color}"></span>${m.variant || "value"}</span>`).join("");
+      card.appendChild(lg);
+    }
+    grid.appendChild(card);
+
+    const chart = {u: null, metric, members, fmt, card, valEl: card.querySelector(".val")};
+    S.charts.push(chart);
+
+    // load data then draw
+    Promise.all(members.map(m => ensureRing(m.id).then(() => ensureHistory(m.id, S.range)))).then(() => {
+      if (renderCharts.gen !== gen) return; // stale render
+      drawChart(chart);
+    });
+  }
+}
+
+function drawChart(chart) {
+  const el = chart.card.querySelector(".plot");
+  const data = windowed(chart.members.map(m => m.id));
+  if (chart.u) { chart.u.setData(data); updateVal(chart, data); return; }
+  if (!data[0].length) { el.innerHTML = `<div class="nodata">no data in range</div>`; chart.pending = true; updateVal(chart, data); return; }
+  el.innerHTML = "";
+  chart.pending = false;
+  const opts = {
+    width: el.clientWidth || 400, height: 150,
+    cursor: {points: {show: false}},
+    padding: [8, 8, 0, 0],
+    scales: { x: { range: () => { const n = Date.now()/1000; return [n - S.range, n]; } } },
+    series: [ {}, ...chart.members.map(m => ({label: m.variant, stroke: m.color, width: 1.5, spanGaps: true,
+                fill: chart.members.length === 1 ? m.color + "14" : undefined})) ],
+    axes: [
+      {...axisStyle, values: (u, vals) => vals.map(t => {
+        const d = new Date(t*1000);
+        return S.range > 86400 ? (d.getMonth()+1)+"/"+d.getDate()+" "+String(d.getHours()).padStart(2,"0")+"h"
+                               : d.toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
+      })},
+      {...axisStyle, size: 64, values: (u, vals) => vals.map(chart.fmt)},
+    ],
+  };
+  chart.u = new uPlot(opts, data, el);
+  new ResizeObserver(() => chart.u && chart.u.setSize({width: el.clientWidth, height: 150})).observe(el);
+  updateVal(chart, data);
+}
+function updateVal(chart, data) {
+  let last = null;
+  const col = data[1] || [];
+  for (let i = col.length - 1; i >= 0; i--) if (col[i] != null) { last = col[i]; break; }
+  chart.valEl.textContent = chart.fmt(last);
+}
+
+// redraw dirty charts at most once a second (SSE points arrive in bursts)
+setInterval(() => {
+  for (const idx of S.dirty) {
+    const c = S.charts[idx];
+    if (c && (c.u || c.pending)) drawChart(c);
+  }
+  S.dirty.clear();
+}, 1000);
+
+// ---------------- live stream ----------------
+function connectStream() {
+  const es = new EventSource("/api/stream");
+  const dot = document.getElementById("dot");
+  es.onopen = () => dot.classList.add("on");
+  es.onerror = () => dot.classList.remove("on");
+  es.addEventListener("point", ev => {
+    S.events++;
+    const u = JSON.parse(ev.data);
+    let isNew = false;
+    if (!S.series.has(u.id)) { S.series.set(u.id, {id: u.id, labels: u.labels}); isNew = true; }
+    const m = S.data.get(u.id) || new Map();
+    m.set(u.point.t, u.point.v);
+    S.data.set(u.id, m);
+    if (isNew) { buildRail(); if (svcOf({labels: u.labels}) === S.service) buildResList(); return; }
+    S.charts.forEach((c, i) => { if (c.members.some(mb => mb.id === u.id)) S.dirty.add(i); });
+  });
+}
+setInterval(() => {
+  document.getElementById("rate").textContent = S.events + " pts/10s · " + S.series.size + " series";
+  S.events = 0;
+}, 10000);
+
+// ---------------- logs drawer ----------------
+let logES = null;
+function startLogStream(pod, container) {
+  if (logES) logES.close();
+  const lines = document.getElementById("loglines");
+  lines.textContent = "";
+  logES = new EventSource(`/api/logs?namespace=${encodeURIComponent(pod.namespace)}&pod=${encodeURIComponent(pod.name)}&container=${encodeURIComponent(container||"")}&tail=200`);
+  const push = txt => {
+    const sp = txt.indexOf(" ");
+    const div = document.createElement("div");
+    if (sp > 0) div.innerHTML = `<span class="ts">${txt.slice(0, sp)}</span> ${escapeHTML(txt.slice(sp+1))}`;
+    else div.textContent = txt;
+    lines.appendChild(div);
+    while (lines.children.length > 2000) lines.removeChild(lines.firstChild);
+    if (document.getElementById("follow").checked) lines.scrollTop = lines.scrollHeight;
+  };
+  logES.addEventListener("log", ev => push(JSON.parse(ev.data)));
+  logES.addEventListener("error", ev => { if (ev.data) push("!! " + JSON.parse(ev.data)); });
+  logES.addEventListener("eof", () => push("-- log stream ended --"));
+}
+function openLogs(pod) {
+  document.getElementById("logname").textContent = pod.namespace + "/" + pod.name;
+  const sel = document.getElementById("logcontainer");
+  sel.innerHTML = (pod.containers || []).map(c => `<option value="${c}">${c}</option>`).join("");
+  sel.style.display = (pod.containers || []).length > 1 ? "" : "none";
+  sel.onchange = () => startLogStream(pod, sel.value);
+  document.getElementById("drawer").classList.add("open");
+  startLogStream(pod, (pod.containers || [])[0] || "");
+}
+function escapeHTML(s) { return s.replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+document.getElementById("closelog").onclick = () => {
+  document.getElementById("drawer").classList.remove("open");
+  if (logES) { logES.close(); logES = null; }
+};
+
+// ---------------- inputs ----------------
+document.getElementById("ressearch").addEventListener("input", e => { S.rsearch = e.target.value.toLowerCase(); buildResList(); });
+document.getElementById("metricfilter").addEventListener("input", e => { S.mfilter = e.target.value.toLowerCase(); renderCharts(); });
+
+// ---------------- boot ----------------
+async function boot() {
+  try {
+    const [series, pods] = await Promise.all([
+      fetch("/api/series").then(r => r.json()),
+      fetch("/api/pods").then(r => r.ok ? r.json() : []),
+    ]);
+    for (const m of series) S.series.set(m.id, m);
+    S.pods = pods || [];
+  } catch (e) { console.error(e); }
+  buildRail();
+  connectStream();
+  setInterval(async () => {
+    try {
+      S.pods = await fetch("/api/pods").then(r => r.ok ? r.json() : S.pods);
+      if (S.service === "Pods") buildResList();
+    } catch {}
+  }, 30000);
+}
+boot();
+</script>
+</body>
+</html>

@@ -1,0 +1,21 @@
+{
+  "listen": ":8080",
+  "retention_points": 720,
+  "aws": {
+    "enabled": true,
+    "region": "ap-south-1",
+    "profile": "",
+    "namespaces": [],
+    "poll_interval_seconds": 60,
+    "discovery_interval_minutes": 10,
+    "period_seconds": 60
+  },
+  "kubernetes": {
+    "enabled": true,
+    "namespaces": [],
+    "poll_interval_seconds": 15,
+    "api_url": "",
+    "bearer_token": "",
+    "insecure_skip_tls_verify": false
+  }
+}
