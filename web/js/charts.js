@@ -8,6 +8,7 @@ import { metricFmt } from "./format.js";
 import { ensureRing, ensureHistory, lastVal, windowed } from "./data.js";
 import { buildPills, buildCtxFilters } from "./nav.js";
 import { renderLogsInline, openAgentLogs } from "./logs.js";
+import { openZoom } from "./zoom.js";
 
 const axisStyle = { stroke: "#6b7a8f", grid: {stroke: "#1c2531", width: 1}, ticks: {stroke: "#1c2531"} };
 
@@ -123,7 +124,10 @@ export function renderMain() {
     const fmt = metricFmt(g.metric);
     const card = document.createElement("div");
     card.className = "card";
-    card.innerHTML = `<div class="hd"><span class="title">${g.metric}</span><span class="val">–</span></div><div class="plot"></div>`;
+    card.innerHTML = `<div class="hd"><span class="title">${g.metric}</span><span class="val">–</span>`
+      + `<button class="maxbtn" title="Maximize" aria-label="Maximize">`
+      + `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg>`
+      + `</button></div><div class="plot"></div>`;
     if (g.members.length > 1) {
       const lg = document.createElement("div");
       lg.className = "legend";
@@ -133,6 +137,7 @@ export function renderMain() {
     }
     grid.appendChild(card);
     const chart = {u: null, metric: g.metric, members: g.members, fmt, card, valEl: card.querySelector(".val")};
+    card.querySelector(".maxbtn").onclick = () => openZoom(chart);
     S.charts.push(chart);
     Promise.all(g.members.map(m => ensureRing(m.id).then(() => ensureHistory(m.id, S.range)))).then(() => {
       if (renderMain.gen !== gen) return;

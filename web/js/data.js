@@ -31,8 +31,8 @@ export function lastVal(id) {
   const meta = S.series.get(id);
   return meta && meta.last ? meta.last.v : null;
 }
-export function windowed(ids) {
-  const now = Math.floor(Date.now()/1000), from = now - S.range;
+export function windowed(ids, range = S.range) {
+  const now = Math.floor(Date.now()/1000), from = now - range;
   const xset = new Set();
   for (const id of ids) {
     const m = S.data.get(id);

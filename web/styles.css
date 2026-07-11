@@ -119,6 +119,27 @@ header h1 span { color: var(--muted); font-weight: 400; }
 .card .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 4px 0 2px; font: 10.5px var(--mono); color: var(--muted); }
 .card .legend .sw { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
 .card .nodata { color: var(--muted); font: 12px var(--mono); padding: 40px 0; text-align: center; }
+.maxbtn { background: none; border: 0; color: var(--muted); cursor: pointer; padding: 2px 4px; margin-left: 8px;
+  display: inline-flex; align-items: center; opacity: 0; transition: opacity .12s; }
+.card:hover .maxbtn { opacity: .65; }
+.maxbtn:hover { opacity: 1; color: var(--text); }
+
+/* maximize modal */
+#zoom { position: fixed; inset: 0; z-index: 100; display: none; align-items: center; justify-content: center;
+  background: rgba(3, 6, 10, .6); }
+#zoom.open { display: flex; }
+#zoom .box { width: min(1100px, 92vw); height: min(680px, 88vh); background: var(--panel);
+  border: 1px solid var(--line); border-radius: 12px; display: flex; flex-direction: column; padding: 14px 18px 18px; }
+#zoom .zbar { display: flex; align-items: center; gap: 14px; margin-bottom: 8px; }
+#zoom .ztitle { font-weight: 600; font-size: 15px; }
+#zoom .zval { font-family: var(--mono); color: var(--accent); font-size: 14px; margin-left: auto; }
+#zoom .zclose { background: none; border: 1px solid var(--line); color: var(--muted); border-radius: 6px;
+  width: 28px; height: 28px; cursor: pointer; font-size: 13px; }
+#zoom .zclose:hover { color: var(--text); border-color: var(--muted); }
+#zoom .zlegend { display: flex; flex-wrap: wrap; gap: 4px 14px; font: 11px var(--mono); color: var(--muted); margin-bottom: 10px; }
+#zoom .zlegend .sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; }
+#zoom .zplot { flex: 1; min-height: 0; }
+#zoom .nodata { color: var(--muted); font: 12px var(--mono); padding: 60px 0; text-align: center; }
 .empty { color: var(--muted); padding: 70px 20px; text-align: center; font: 13px var(--mono); white-space: pre-line; }
 .u-legend { display: none; }
 

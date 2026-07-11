@@ -1,0 +1,121 @@
+"use strict";
+// Maximize view: click a chart card's maximize button to open a large modal of
+// that single chart with its own fine-grained range selector (5m…6h),
+// independent of the dashboard's global range. All ranges are <= the 6h ring
+// buffer, so the data is already in S.data — no extra fetches. The modal
+// redraws on a 1s interval while open so it stays live.
+
+import { S } from "./state.js";
+import { windowed } from "./data.js";
+
+const ZOOM_RANGES = [[300,"5m"],[900,"15m"],[1800,"30m"],[3600,"1h"],[10800,"3h"],[21600,"6h"]];
+const axisStyle = { stroke: "#6b7a8f", grid: {stroke: "#1c2531", width: 1}, ticks: {stroke: "#1c2531"} };
+
+let z = null;      // { chart, range, u, els..., timer }
+let root = null;   // the #zoom modal element (built once)
+
+function build() {
+  if (root) return root;
+  root = document.createElement("div");
+  root.id = "zoom";
+  root.innerHTML =
+    '<div class="box">' +
+      '<div class="zbar">' +
+        '<span class="ztitle"></span>' +
+        '<div class="pills zranges"></div>' +
+        '<span class="zval"></span>' +
+        '<button class="zclose" aria-label="Close">✕</button>' +
+      '</div>' +
+      '<div class="zlegend"></div>' +
+      '<div class="zplot"></div>' +
+    '</div>';
+  document.body.appendChild(root);
+  root.querySelector(".zclose").onclick = closeZoom;
+  root.addEventListener("mousedown", e => { if (e.target === root) closeZoom(); }); // backdrop
+  return root;
+}
+
+export function openZoom(chart) {
+  build();
+  z = {
+    chart, range: 3600,
+    plotEl: root.querySelector(".zplot"),
+    valEl: root.querySelector(".zval"),
+    u: null,
+  };
+  root.querySelector(".ztitle").textContent = chart.metric;
+
+  // range pills
+  const pills = root.querySelector(".zranges");
+  pills.innerHTML = "";
+  for (const [secs, label] of ZOOM_RANGES) {
+    const b = document.createElement("button");
+    b.className = "pill" + (secs === z.range ? " active" : "");
+    b.textContent = label;
+    b.onclick = () => setRange(secs);
+    pills.appendChild(b);
+  }
+
+  // legend (only when more than one line)
+  const lg = root.querySelector(".zlegend");
+  lg.innerHTML = chart.members.length > 1
+    ? chart.members.map(m => `<span><span class="sw" style="background:${m.color}"></span>${m.variant || "value"}</span>`).join("")
+    : "";
+
+  root.classList.add("open");
+  document.addEventListener("keydown", onKey);
+  draw();
+  z.timer = setInterval(draw, 1000);            // keep the maximized chart live
+  new ResizeObserver(() => { if (z && z.u) z.u.setSize({ width: z.plotEl.clientWidth, height: z.plotEl.clientHeight }); }).observe(z.plotEl);
+}
+
+function setRange(secs) {
+  if (!z) return;
+  z.range = secs;
+  for (const b of root.querySelectorAll(".zranges .pill")) b.classList.toggle("active", b.textContent === labelFor(secs));
+  if (z.u) { z.u.destroy(); z.u = null; }        // rebuild so the x-scale rewindows
+  z.plotEl.innerHTML = "";
+  draw();
+}
+const labelFor = secs => (ZOOM_RANGES.find(r => r[0] === secs) || [,""])[1];
+
+function draw() {
+  if (!z) return;
+  const data = windowed(z.chart.members.map(m => m.id), z.range);
+  // last non-null value for the readout
+  let last = null; const col = data[1] || [];
+  for (let i = col.length - 1; i >= 0; i--) if (col[i] != null) { last = col[i]; break; }
+  z.valEl.textContent = z.chart.fmt(last);
+
+  if (z.u) { z.u.setData(data); return; }
+  if (!data[0].length) { z.plotEl.innerHTML = '<div class="nodata">no data in range</div>'; return; }
+  z.plotEl.innerHTML = "";
+  const el = z.plotEl, fmt = z.chart.fmt;
+  const opts = {
+    width: el.clientWidth || 800, height: el.clientHeight || 400,
+    cursor: { points: { show: false } },
+    padding: [10, 12, 0, 0],
+    scales: { x: { range: () => { const n = Date.now()/1000; return [n - z.range, n]; } } },
+    series: [ {}, ...z.chart.members.map(m => ({ label: m.variant, stroke: m.color, width: 1.5, spanGaps: true,
+                fill: z.chart.members.length === 1 ? m.color + "14" : undefined })) ],
+    axes: [
+      {...axisStyle, values: (u, vals) => vals.map(t => {
+        const d = new Date(t*1000);
+        return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      })},
+      {...axisStyle, size: 64, values: (u, vals) => vals.map(fmt)},
+    ],
+  };
+  z.u = new uPlot(opts, data, el);
+}
+
+function onKey(e) { if (e.key === "Escape") closeZoom(); }
+
+function closeZoom() {
+  if (!z) return;
+  clearInterval(z.timer);
+  if (z.u) z.u.destroy();
+  root.classList.remove("open");
+  document.removeEventListener("keydown", onKey);
+  z = null;
+}

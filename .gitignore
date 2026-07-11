@@ -3,3 +3,4 @@ awsobs-linux
 server.json
 agent.json
 .snapshot
+.playwright-mcp/
