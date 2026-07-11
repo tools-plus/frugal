@@ -51,6 +51,12 @@ func New(st *store.Store, ls *logstore.Store, inv *k8s.Inventory, clusters []Clu
 	s := &Server{store: st, logs: ls, inv: inv, clusters: clusters, hist: hist, status: status, ingestToken: ingestToken, logger: logger, assets: assets}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", s.handleIndex)
+	// Static dashboard assets embedded alongside index.html. The FS layout
+	// (styles.css, js/, vendor/) mirrors the URL paths, so no prefix stripping.
+	assetFS := http.FileServerFS(assets)
+	mux.Handle("GET /styles.css", assetFS)
+	mux.Handle("GET /js/", assetFS)
+	mux.Handle("GET /vendor/", assetFS)
 	mux.HandleFunc("GET /api/series", s.handleSeries)
 	mux.HandleFunc("GET /api/series/data", s.handleSeriesData)
 	mux.HandleFunc("GET /api/history", s.handleHistory)

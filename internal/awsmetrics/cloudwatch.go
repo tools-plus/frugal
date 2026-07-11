@@ -140,6 +140,13 @@ var wildcardNamespaces = map[string]bool{
 
 const wildcardCap = 1500 // per-namespace safety cap on discovered targets
 
+// dailyNamespaces publish datapoints only once per day (S3 storage metrics),
+// so poll() gives them a multi-day window at daily resolution — a short
+// trailing window like the other namespaces use would never catch a point.
+var dailyNamespaces = map[string]bool{
+	"AWS/S3": true,
+}
+
 // resourceDims is the priority order for picking the dimension that names
 // "the resource" a series belongs to. Everything else becomes the variant.
 var resourceDims = []string{
@@ -442,11 +449,28 @@ func (c *Collector) poll(ctx context.Context) {
 		period = 60
 	}
 	end := time.Now()
-	start := end.Add(-5 * time.Duration(period) * time.Second)
 	c.stMu.Lock()
 	c.lastPoll = end
 	c.stMu.Unlock()
 
+	// Split off namespaces that publish only once per day (S3 storage): a short
+	// trailing window never overlaps their datapoints, so poll them over a
+	// multi-day window at daily resolution instead of the normal short window.
+	var regular, daily []target
+	for _, t := range targets {
+		if dailyNamespaces[t.Namespace] {
+			daily = append(daily, t)
+		} else {
+			regular = append(regular, t)
+		}
+	}
+	c.fetch(ctx, regular, end.Add(-5*time.Duration(period)*time.Second), end, period)
+	c.fetch(ctx, daily, end.Add(-50*time.Hour), end, 86400)
+}
+
+// fetch runs GetMetricData for a set of targets over [start,end] at the given
+// period, batching to stay under CloudWatch's per-request query limit.
+func (c *Collector) fetch(ctx context.Context, targets []target, start, end time.Time, period int32) {
 	const batchSize = 500
 	for off := 0; off < len(targets); off += batchSize {
 		hi := off + batchSize

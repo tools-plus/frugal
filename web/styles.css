@@ -1,0 +1,136 @@
+:root {
+  --bg: #0f141b; --panel: #151c26; --panel-2: #1a2330;
+  --line: #232d3b; --text: #c9d4e3; --muted: #6b7a8f;
+  --accent: #3fbfb4; --warn: #e8a33d; --ok: #6fbf73; --bad: #e25d4e;
+  --mono: ui-monospace, "SF Mono", "IBM Plex Mono", Menlo, Consolas, monospace;
+  --sans: system-ui, -apple-system, "IBM Plex Sans", "Segoe UI", Roboto, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 var(--sans); overflow: hidden; }
+input, button { font-family: inherit; }
+
+header {
+  display: flex; align-items: center; gap: 16px; height: 46px;
+  padding: 0 16px; border-bottom: 1px solid var(--line);
+}
+header h1 { font-size: 14px; font-weight: 600; margin: 0; letter-spacing: .04em; }
+header h1 span { color: var(--muted); font-weight: 400; }
+.live { display: flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11px; color: var(--muted); margin-left: auto; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--bad); }
+.dot.on { background: var(--ok); }
+@media (prefers-reduced-motion: no-preference) { .dot.on { animation: pulse 2s infinite; } }
+@keyframes pulse { 50% { opacity: .35; } }
+
+.layout { display: grid; grid-template-columns: 64px 250px 1fr; height: calc(100vh - 47px); }
+
+/* column 1: service rail */
+#rail { border-right: 1px solid var(--line); padding: 10px 0; overflow-y: auto; display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.tile {
+  width: 46px; height: 40px; border-radius: 8px; border: 1px solid transparent;
+  background: none; color: var(--muted); cursor: pointer;
+  font: 500 10px/1.1 var(--mono); letter-spacing: .03em;
+  display: flex; align-items: center; justify-content: center; text-align: center; padding: 2px;
+}
+.tile:hover { background: var(--panel); color: var(--text); }
+.tile.active { background: var(--panel-2); color: var(--accent); border-color: var(--line); }
+.tile.nodata { opacity: .4; }
+/* glyphs inherit the tile's color (currentColor): muted idle, bright on hover,
+   accent when active — same state model the text labels used. */
+.svcicon { display: block; }
+.rail-sect { font-size: 9px; letter-spacing: .12em; color: var(--muted); text-transform: uppercase; margin: 8px 0 2px; }
+/* instant tooltip (no transition delay), positioned by wireTips() in nav.js */
+#tip {
+  position: fixed; z-index: 60; transform: translateY(-50%);
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+  font: 11px var(--mono); padding: 4px 9px; border-radius: 6px;
+  white-space: nowrap; pointer-events: none; opacity: 0;
+}
+#tip.show { opacity: 1; }
+
+/* column 2: resource list */
+#reslist { border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+#reslist .hd { padding: 10px 12px 8px; border-bottom: 1px solid var(--line); }
+#reslist .hd .svc { font-weight: 600; font-size: 13px; }
+#reslist .hd .cnt { color: var(--muted); font-family: var(--mono); font-size: 11px; margin-left: 6px; }
+#ressearch {
+  width: 100%; margin-top: 8px; background: var(--panel); border: 1px solid var(--line);
+  color: var(--text); border-radius: 6px; padding: 5px 9px; font: 12px var(--mono);
+}
+#ressearch:focus, #metricfilter:focus { outline: 1px solid var(--accent); }
+#resitems { overflow-y: auto; flex: 1; padding: 6px; }
+.res {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  background: none; border: 0; color: var(--text); text-align: left; cursor: pointer;
+  padding: 7px 10px; border-radius: 6px; font-size: 12.5px;
+}
+.res:hover { background: var(--panel); }
+.res.active { background: var(--panel-2); }
+.res .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.res .meta { font-family: var(--mono); font-size: 10px; color: var(--muted); }
+.pdot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+.caret { color: var(--muted); font-size: 10px; width: 12px; flex: none; }
+.pdot.Running { background: var(--ok); } .pdot.Pending { background: var(--warn); }
+.pdot.Failed, .pdot.Unknown { background: var(--bad); } .pdot.Succeeded { background: var(--muted); }
+
+/* column 3: main */
+#main { display: flex; flex-direction: column; min-height: 0; min-width: 0; }
+#mainbar {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 10px 16px; border-bottom: 1px solid var(--line);
+}
+#mainbar .rname { font-weight: 600; font-size: 13.5px; max-width: 34ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#mainbar .phase { font: 11px var(--mono); }
+#mainbar .phase.Running { color: var(--ok); } #mainbar .phase.Pending { color: var(--warn); }
+#mainbar .phase.Failed { color: var(--bad); }
+#logsbtn {
+  background: var(--panel-2); border: 1px solid var(--line); color: var(--muted);
+  border-radius: 5px; font-size: 11px; padding: 3px 10px; cursor: pointer; display: none;
+}
+#logsbtn:hover { color: var(--text); border-color: var(--muted); }
+#metricfilter {
+  margin-left: auto; background: var(--panel); border: 1px solid var(--line);
+  color: var(--text); border-radius: 6px; padding: 5px 10px; width: 200px; font: 12px var(--mono);
+}
+#ctxfilters { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+#ctxfilters select {
+  background: var(--panel); border: 1px solid var(--line); color: var(--text);
+  border-radius: 6px; padding: 5px 8px; font: 12px var(--mono); max-width: 220px;
+}
+#ctxfilters select:focus { outline: 1px solid var(--accent); }
+#ctxfilters .lbl { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+#mainlogwrap { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+#mainlog { flex: 1; overflow-y: auto; margin: 0; background: #0b0f15; border: 1px solid var(--line);
+  border-radius: 8px; padding: 12px 16px; font: 12px/1.6 var(--mono); color: #a8b6c8;
+  white-space: pre-wrap; word-break: break-all; }
+#mainlog .ts { color: var(--muted); }
+.pills { display: flex; gap: 2px; background: var(--panel); border: 1px solid var(--line); border-radius: 7px; padding: 2px; }
+.pill { background: none; border: 0; color: var(--muted); font: 11px var(--mono); padding: 4px 9px; border-radius: 5px; cursor: pointer; }
+.pill:hover { color: var(--text); }
+.pill.active { background: var(--panel-2); color: var(--accent); }
+.pill.hidden { display: none; }
+
+#charts { overflow-y: auto; flex: 1; padding: 14px 16px 40px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(430px, 1fr)); gap: 12px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px 6px; }
+.card .hd { display: flex; align-items: baseline; gap: 10px; margin-bottom: 2px; }
+.card .title { font-weight: 500; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card .val { margin-left: auto; font-family: var(--mono); font-size: 12px; color: var(--accent); white-space: nowrap; }
+.card .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 4px 0 2px; font: 10.5px var(--mono); color: var(--muted); }
+.card .legend .sw { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
+.card .nodata { color: var(--muted); font: 12px var(--mono); padding: 40px 0; text-align: center; }
+.empty { color: var(--muted); padding: 70px 20px; text-align: center; font: 13px var(--mono); white-space: pre-line; }
+.u-legend { display: none; }
+
+#drawer {
+  position: fixed; left: 0; right: 0; bottom: 0; height: 42vh;
+  background: #0b0f15; border-top: 1px solid var(--line); display: none;
+  flex-direction: column; z-index: 10;
+}
+#drawer.open { display: flex; }
+#drawer .bar { display: flex; align-items: center; gap: 12px; padding: 8px 16px; border-bottom: 1px solid var(--line); }
+#drawer .bar .name { font: 12px var(--mono); color: var(--accent); }
+#drawer .bar select { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 5px; font: 11px var(--mono); padding: 2px 6px; }
+#drawer .bar button { margin-left: auto; background: none; border: 1px solid var(--line); color: var(--muted); border-radius: 5px; padding: 3px 10px; cursor: pointer; font-size: 12px; }
+#loglines { flex: 1; overflow-y: auto; margin: 0; padding: 10px 16px; font: 12px/1.6 var(--mono); color: #a8b6c8; white-space: pre-wrap; word-break: break-all; }
+#loglines .ts { color: var(--muted); }
