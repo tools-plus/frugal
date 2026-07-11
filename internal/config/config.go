@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -116,6 +117,21 @@ type AgentConfig struct {
 	Hostname string `json:"hostname"` // defaults to os.Hostname()
 }
 
+// AuthConfig gates the dashboard behind a login. Enabled defaults to true; set
+// "auth": {"enabled": false} to serve without authentication (e.g. behind a
+// trusted VPN / port-forward, or for local dev).
+type AuthConfig struct {
+	// Enabled is a pointer so an omitted or empty "auth" block still defaults
+	// to on — only an explicit `false` disables auth.
+	Enabled *bool `json:"enabled"`
+	// DBPath is the auth SQLite file. Empty means <data_dir>/auth.db, or
+	// ./awsobs-auth.db when data_dir is unset.
+	DBPath string `json:"db_path"`
+}
+
+// On reports whether authentication is enabled (the default).
+func (a AuthConfig) On() bool { return a.Enabled == nil || *a.Enabled }
+
 type Config struct {
 	Listen       string       `json:"listen"`
 	RetentionCap int          `json:"retention_points"` // ring buffer points per series
@@ -123,6 +139,7 @@ type Config struct {
 	Kubernetes   K8sConfig    `json:"kubernetes"`
 	Native       NativeConfig `json:"native"`
 	Agent        AgentConfig  `json:"agent"`
+	Auth         AuthConfig   `json:"auth"`
 	// IngestToken guards the push API; agents must present it as a bearer
 	// token. Empty means unauthenticated ingest (fine on localhost only).
 	IngestToken       string `json:"ingest_token"`
@@ -220,4 +237,16 @@ func (c AWSConfig) DiscoveryInterval() time.Duration {
 }
 func (c K8sConfig) PollInterval() time.Duration {
 	return time.Duration(c.PollIntervalSeconds) * time.Second
+}
+
+// AuthDBPath resolves where the auth SQLite file lives: an explicit db_path,
+// else alongside the metrics db in data_dir, else the working directory.
+func (c Config) AuthDBPath() string {
+	if c.Auth.DBPath != "" {
+		return c.Auth.DBPath
+	}
+	if c.DataDir != "" {
+		return filepath.Join(c.DataDir, "auth.db")
+	}
+	return "awsobs-auth.db"
 }

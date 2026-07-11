@@ -144,14 +144,44 @@ kubectl -n awsobs port-forward svc/awsobs 8080:80
 IRSA gives the pod CloudWatch access without long-lived keys. The IAM policy
 needs only `cloudwatch:ListMetrics` and `cloudwatch:GetMetricData`.
 
-The Service is ClusterIP on purpose — the dashboard has **no auth built in**.
-Keep it behind port-forward, your VPN, or an authenticating ingress.
+The Service is ClusterIP on purpose. The dashboard has a built-in login (see
+**Authentication** below), but keep it behind port-forward, your VPN, or an
+authenticating ingress as defense in depth.
+
+## Authentication
+
+The dashboard is gated by a username/password login, **enabled by default**.
+Users and sessions live in their own SQLite file (`<data_dir>/auth.db`,
+separate from the metrics db), so this is independent of `data_dir` metric
+persistence.
+
+- **First setup** seeds a default user `admin` / `admin`, flagged
+  must-change — the first login forces you to set a real password before the
+  dashboard is reachable.
+- Passwords are bcrypt-hashed; login issues an `HttpOnly` session cookie
+  (7-day lifetime). Change your password any time from the dashboard header.
+- **Disable it** (e.g. behind a trusted VPN, or for local dev) with
+  `"auth": { "enabled": false }` — this restores the original open dashboard.
+- `"auth": { "db_path": "..." }` overrides the auth db location (defaults to
+  `<data_dir>/auth.db`, or `./awsobs-auth.db` when `data_dir` is unset).
+
+Agent push endpoints (`/api/ingest*`) are **not** behind the login — they
+authenticate with the shared `ingest_token` bearer token, since agents can't
+do an interactive login.
+
+The auth db needs the sqlite driver, so a login-enabled server must be built
+with `CGO_ENABLED=1` (the default), same as `data_dir` persistence.
 
 ## HTTP API
 
 | Endpoint | What |
 |---|---|
-| `GET /` | dashboard |
+| `GET /` | dashboard (requires a session when auth is enabled) |
+| `GET /login` | login page |
+| `POST /api/login` | authenticate, start a session (sets cookie) |
+| `POST /api/logout` | end the current session |
+| `POST /api/change-password` | set a new password for the logged-in user |
+| `GET /api/me` | auth status: enabled, authenticated, user, must_change |
 | `GET /api/series?filter=` | all known series (id, labels, last value) |
 | `GET /api/series/data?id=` | full ring buffer for one series |
 | `GET /api/history?id=&from=&to=` | on-demand CloudWatch fetch for long ranges (unix seconds) |
@@ -162,6 +192,9 @@ Keep it behind port-forward, your VPN, or an authenticating ingress.
 | `GET /api/agentlogs?source=host/<name>&tail=` | SSE: live tail of agent-shipped logs |
 | `POST /api/ingest` | agent metric push (bearer token) |
 | `POST /api/ingest/logs` | agent log push (bearer token) |
+
+The read/dashboard endpoints require a valid session cookie when auth is on;
+`/login`, the auth endpoints, and static assets are public.
 
 Series IDs are pipe-delimited and predictable:
 `k8s|pod|default/web-7f9c|cpu_cores`, `cw|RDS|CPUUtilization|mydb`.

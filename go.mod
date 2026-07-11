@@ -7,6 +7,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.29.14
 	github.com/aws/aws-sdk-go-v2/service/cloudwatch v1.45.1
 	github.com/mattn/go-sqlite3 v1.14.22
+	golang.org/x/crypto v0.31.0
 )
 
 require (

@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>awsobs — sign in</title>
+<link rel="stylesheet" href="/styles.css">
+<style>
+  body { overflow: auto; }
+  .login-wrap { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+  .login-card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 28px 26px; width: 300px; display: flex; flex-direction: column; gap: 11px; }
+  .login-card[hidden] { display: none; }   /* [hidden] is overridden by display:flex without this */
+  .login-card h1 { margin: 0; font-size: 18px; letter-spacing: .04em; }
+  .login-card h1 span { color: var(--muted); font-weight: 400; }
+  .login-card .sub { color: var(--muted); font: 12px var(--mono); margin-bottom: 4px; }
+  .login-card input { background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 7px; padding: 9px 11px; font: 13px var(--sans); }
+  .login-card input:focus { outline: 1px solid var(--accent); }
+  .login-card button { background: var(--accent); color: #08120f; border: 0; border-radius: 7px;
+    padding: 9px; font-weight: 600; cursor: pointer; font-size: 13px; margin-top: 2px; }
+  .login-card button:hover { opacity: .92; }
+  .login-card .err { color: var(--bad); font: 11px var(--mono); min-height: 14px; }
+</style>
+</head>
+<body>
+<div class="login-wrap">
+  <form id="loginForm" class="login-card" hidden>
+    <h1>awsobs <span>/ sign in</span></h1>
+    <div class="sub">enter your credentials</div>
+    <input id="u" placeholder="username" autocomplete="username" autofocus>
+    <input id="p" type="password" placeholder="password" autocomplete="current-password">
+    <button type="submit">Sign in</button>
+    <div class="err" id="loginErr"></div>
+  </form>
+
+  <form id="changeForm" class="login-card" hidden>
+    <h1>awsobs <span>/ new password</span></h1>
+    <div class="sub" id="changeSub">set a new password to continue</div>
+    <input id="np" type="password" placeholder="new password" autocomplete="new-password">
+    <input id="np2" type="password" placeholder="confirm new password" autocomplete="new-password">
+    <button type="submit">Set password</button>
+    <div class="err" id="changeErr"></div>
+  </form>
+</div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const loginForm = $("loginForm"), changeForm = $("changeForm");
+function show(which) {
+  loginForm.hidden = which !== "login";
+  changeForm.hidden = which !== "change";
+  const first = which === "login" ? $("u") : $("np");
+  if (first) first.focus();
+}
+
+async function init() {
+  let me = {};
+  try { me = await fetch("/api/me").then(r => r.json()); } catch {}
+  if (me.enabled === false) { location.replace("/"); return; }        // auth off
+  const wantChange = new URLSearchParams(location.search).has("change");
+  if (me.authenticated) {
+    if (me.must_change) { $("changeSub").textContent = "your account uses a default password — set a new one to continue"; show("change"); }
+    else if (wantChange) show("change");
+    else location.replace("/");
+  } else {
+    show("login");
+  }
+}
+
+loginForm.addEventListener("submit", async e => {
+  e.preventDefault();
+  $("loginErr").textContent = "";
+  let d = {};
+  try {
+    const r = await fetch("/api/login", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username: $("u").value, password: $("p").value }) });
+    d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.ok) { $("loginErr").textContent = "invalid username or password"; return; }
+  } catch { $("loginErr").textContent = "network error"; return; }
+  if (d.must_change) { $("changeSub").textContent = "your account uses a default password — set a new one to continue"; show("change"); }
+  else location.replace("/");
+});
+
+changeForm.addEventListener("submit", async e => {
+  e.preventDefault();
+  $("changeErr").textContent = "";
+  const np = $("np").value, np2 = $("np2").value;
+  if (np.length < 6) { $("changeErr").textContent = "password must be at least 6 characters"; return; }
+  if (np !== np2) { $("changeErr").textContent = "passwords do not match"; return; }
+  try {
+    const r = await fetch("/api/change-password", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ new_password: np }) });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || !d.ok) { $("changeErr").textContent = (d && d.error) || "could not change password"; return; }
+  } catch { $("changeErr").textContent = "network error"; return; }
+  location.replace("/");
+});
+
+init();
+</script>
+</body>
+</html>

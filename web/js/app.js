@@ -11,6 +11,20 @@ import { connectStream } from "./stream.js";
 document.getElementById("ressearch").addEventListener("input", e => { S.rsearch = e.target.value.toLowerCase(); buildResList(); });
 document.getElementById("metricfilter").addEventListener("input", e => { S.mfilter = e.target.value.toLowerCase(); renderMain(); });
 
+// ---------------- auth (header user menu) ----------------
+async function initAuth() {
+  let me = {};
+  try { me = await fetch("/api/me").then(r => r.json()); } catch { return; }
+  if (!me.enabled || !me.authenticated) return;   // auth disabled (or, unexpectedly, not signed in)
+  document.getElementById("username").textContent = me.user || "";
+  document.getElementById("usermenu").hidden = false;
+  document.getElementById("logout").onclick = async () => {
+    try { await fetch("/api/logout", { method: "POST" }); } catch {}
+    location.href = "/login";
+  };
+  document.getElementById("changepw").onclick = () => { location.href = "/login?change=1"; };
+}
+
 // ---------------- boot ----------------
 async function refreshPods() {
   try {
@@ -31,6 +45,7 @@ async function boot() {
     const series = await fetch("/api/series").then(r => r.json());
     for (const m of series) S.series.set(m.id, m);
   } catch (e) { console.error(e); }
+  initAuth();
   if (!restoreNav()) buildRail();   // restore last view, else auto-select first
   connectStream();
   (async () => { // pods: quick retries while collectors warm up, then steady 30s

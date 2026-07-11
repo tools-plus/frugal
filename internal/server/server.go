@@ -34,12 +34,24 @@ type Cluster struct {
 	Client *k8s.Client
 }
 
+// Authenticator is the user/session backend (internal/auth). Nil disables
+// authentication, restoring the original open-dashboard behavior.
+type Authenticator interface {
+	Authenticate(user, pass string) (mustChange, ok bool)
+	CreateSession(user string) (string, error)
+	SessionUser(token string) (string, bool)
+	MustChange(user string) bool
+	SetPassword(user, newPass string) error
+	DeleteSession(token string)
+}
+
 type Server struct {
 	store       *store.Store
 	logs        *logstore.Store
 	inv         *k8s.Inventory
-	clusters    []Cluster // empty when kubernetes collection is disabled
-	hist        Historian // nil when the AWS collector is disabled
+	clusters    []Cluster     // empty when kubernetes collection is disabled
+	hist        Historian     // nil when the AWS collector is disabled
+	authn       Authenticator // nil when authentication is disabled
 	status      func() map[string]any
 	ingestToken string
 	logger      *log.Logger
@@ -47,24 +59,37 @@ type Server struct {
 	mux         *http.ServeMux
 }
 
-func New(st *store.Store, ls *logstore.Store, inv *k8s.Inventory, clusters []Cluster, hist Historian, status func() map[string]any, ingestToken string, assets embed.FS, logger *log.Logger) *Server {
-	s := &Server{store: st, logs: ls, inv: inv, clusters: clusters, hist: hist, status: status, ingestToken: ingestToken, logger: logger, assets: assets}
+func New(st *store.Store, ls *logstore.Store, inv *k8s.Inventory, clusters []Cluster, hist Historian, status func() map[string]any, ingestToken string, authn Authenticator, assets embed.FS, logger *log.Logger) *Server {
+	s := &Server{store: st, logs: ls, inv: inv, clusters: clusters, hist: hist, authn: authn, status: status, ingestToken: ingestToken, logger: logger, assets: assets}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /", s.handleIndex)
-	// Static dashboard assets embedded alongside index.html. The FS layout
-	// (styles.css, js/, vendor/) mirrors the URL paths, so no prefix stripping.
+
+	// Public: the login page, the auth endpoints, and static assets (JS/CSS
+	// carry no data — the sensitive surface is the dashboard HTML and the data
+	// APIs, which are gated below).
+	mux.HandleFunc("GET /login", s.handleLoginPage)
+	mux.HandleFunc("POST /api/login", s.handleLogin)
+	mux.HandleFunc("POST /api/logout", s.handleLogout)
+	mux.HandleFunc("POST /api/change-password", s.handleChangePassword)
+	mux.HandleFunc("GET /api/me", s.handleMe)
 	assetFS := http.FileServerFS(assets)
 	mux.Handle("GET /styles.css", assetFS)
 	mux.Handle("GET /js/", assetFS)
 	mux.Handle("GET /vendor/", assetFS)
-	mux.HandleFunc("GET /api/series", s.handleSeries)
-	mux.HandleFunc("GET /api/series/data", s.handleSeriesData)
-	mux.HandleFunc("GET /api/history", s.handleHistory)
-	mux.HandleFunc("GET /api/stream", s.handleStream)
-	mux.HandleFunc("GET /api/pods", s.handlePods)
-	mux.HandleFunc("GET /api/status", s.handleStatus)
-	mux.HandleFunc("GET /api/logs", s.handleLogs)
-	mux.HandleFunc("GET /api/agentlogs", s.handleAgentLogs)
+
+	// Gated: the dashboard and every data endpoint require a valid session
+	// (and a completed password change) when auth is enabled.
+	mux.HandleFunc("GET /", s.gate(s.handleIndex))
+	mux.HandleFunc("GET /api/series", s.gate(s.handleSeries))
+	mux.HandleFunc("GET /api/series/data", s.gate(s.handleSeriesData))
+	mux.HandleFunc("GET /api/history", s.gate(s.handleHistory))
+	mux.HandleFunc("GET /api/stream", s.gate(s.handleStream))
+	mux.HandleFunc("GET /api/pods", s.gate(s.handlePods))
+	mux.HandleFunc("GET /api/status", s.gate(s.handleStatus))
+	mux.HandleFunc("GET /api/logs", s.gate(s.handleLogs))
+	mux.HandleFunc("GET /api/agentlogs", s.gate(s.handleAgentLogs))
+
+	// Agent push endpoints stay on the shared bearer token (agents can't do
+	// an interactive login).
 	mux.HandleFunc("POST /api/ingest", s.auth(s.handleIngest))
 	mux.HandleFunc("POST /api/ingest/logs", s.auth(s.handleIngestLogs))
 	s.mux = mux
@@ -258,6 +283,151 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 	}
 	fmt.Fprint(w, "event: eof\ndata: {}\n\n")
 	fl.Flush()
+}
+
+// ---------------------------------------------------------------- sessions
+
+const sessionCookie = "awsobs_session"
+
+// sessionUser returns the logged-in user for the request's session cookie.
+func (s *Server) sessionUser(r *http.Request) (string, bool) {
+	c, err := r.Cookie(sessionCookie)
+	if err != nil {
+		return "", false
+	}
+	return s.authn.SessionUser(c.Value)
+}
+
+func setSessionCookie(w http.ResponseWriter, r *http.Request, token string) {
+	http.SetCookie(w, &http.Cookie{
+		Name: sessionCookie, Value: token, Path: "/",
+		HttpOnly: true, SameSite: http.SameSiteLaxMode,
+		Secure:  r.TLS != nil,
+		Expires: time.Now().Add(sessionTTL), MaxAge: int(sessionTTL.Seconds()),
+	})
+}
+
+// sessionTTL mirrors auth.SessionTTL for the cookie lifetime (kept as a local
+// constant so the server package doesn't import auth just for a duration).
+const sessionTTL = 7 * 24 * time.Hour
+
+func clearSessionCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", HttpOnly: true, MaxAge: -1})
+}
+
+// gate protects the dashboard and data APIs: a valid session is required, and
+// a user still flagged must-change is treated as not-yet-authed (so they can't
+// bypass the forced password change). No-op when auth is disabled.
+func (s *Server) gate(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.authn == nil {
+			next(w, r)
+			return
+		}
+		user, ok := s.sessionUser(r)
+		if !ok || s.authn.MustChange(user) {
+			if strings.HasPrefix(r.URL.Path, "/api/") {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+			} else {
+				http.Redirect(w, r, "/login", http.StatusFound)
+			}
+			return
+		}
+		next(w, r)
+	}
+}
+
+func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
+	b, err := s.assets.ReadFile("login.html")
+	if err != nil {
+		http.Error(w, "login asset missing", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write(b)
+}
+
+// GET /api/me — auth status for the login page and dashboard header.
+func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
+	if s.authn == nil {
+		writeJSON(w, map[string]any{"enabled": false})
+		return
+	}
+	user, ok := s.sessionUser(r)
+	writeJSON(w, map[string]any{
+		"enabled":       true,
+		"authenticated": ok,
+		"user":          user,
+		"must_change":   ok && s.authn.MustChange(user),
+	})
+}
+
+// POST /api/login — validate credentials and start a session.
+func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
+	if s.authn == nil {
+		http.Error(w, "auth disabled", http.StatusNotFound)
+		return
+	}
+	var body struct{ Username, Password string }
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	mustChange, ok := s.authn.Authenticate(body.Username, body.Password)
+	if !ok {
+		http.Error(w, "invalid credentials", http.StatusUnauthorized)
+		writeJSON(w, map[string]any{"ok": false})
+		return
+	}
+	token, err := s.authn.CreateSession(body.Username)
+	if err != nil {
+		http.Error(w, "session error", http.StatusInternalServerError)
+		return
+	}
+	setSessionCookie(w, r, token)
+	writeJSON(w, map[string]any{"ok": true, "must_change": mustChange})
+}
+
+// POST /api/logout — end the current session.
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	if s.authn != nil {
+		if c, err := r.Cookie(sessionCookie); err == nil {
+			s.authn.DeleteSession(c.Value)
+		}
+	}
+	clearSessionCookie(w)
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+// POST /api/change-password — set a new password for the logged-in user
+// (also completes the forced change for a seeded account).
+func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
+	if s.authn == nil {
+		http.Error(w, "auth disabled", http.StatusNotFound)
+		return
+	}
+	user, ok := s.sessionUser(r)
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	var body struct {
+		NewPassword string `json:"new_password"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if len(body.NewPassword) < 6 {
+		w.WriteHeader(http.StatusBadRequest)
+		writeJSON(w, map[string]any{"ok": false, "error": "password must be at least 6 characters"})
+		return
+	}
+	if err := s.authn.SetPassword(user, body.NewPassword); err != nil {
+		http.Error(w, "could not set password", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
 }
 
 // auth guards the push endpoints with the shared ingest token.

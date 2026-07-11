@@ -5,6 +5,10 @@
   "db_retention_hours": 72,
   "retention_points": 720,
   "log_retention_lines": 2000,
+  "auth": {
+    "enabled": true,
+    "db_path": ""
+  },
   "aws": {
     "enabled": true,
     "region": "",

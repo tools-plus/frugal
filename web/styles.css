@@ -17,6 +17,12 @@ header {
 header h1 { font-size: 14px; font-weight: 600; margin: 0; letter-spacing: .04em; }
 header h1 span { color: var(--muted); font-weight: 400; }
 .live { display: flex; align-items: center; gap: 6px; font-family: var(--mono); font-size: 11px; color: var(--muted); margin-left: auto; }
+.user { display: flex; align-items: center; gap: 10px; margin-left: 18px; font: 11px var(--mono); color: var(--muted); }
+.user[hidden] { display: none; }   /* [hidden] would otherwise be overridden by display:flex */
+.user #username { color: var(--text); }
+.user button { background: var(--panel-2); border: 1px solid var(--line); color: var(--muted);
+  border-radius: 5px; padding: 3px 9px; cursor: pointer; font: 11px var(--mono); }
+.user button:hover { color: var(--text); border-color: var(--muted); }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--bad); }
 .dot.on { background: var(--ok); }
 @media (prefers-reduced-motion: no-preference) { .dot.on { animation: pulse 2s infinite; } }

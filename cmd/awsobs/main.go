@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/example/awsobs/internal/agent"
+	"github.com/example/awsobs/internal/auth"
 	"github.com/example/awsobs/internal/awsmetrics"
 	"github.com/example/awsobs/internal/config"
 	"github.com/example/awsobs/internal/db"
@@ -125,6 +126,22 @@ func runServer(ctx context.Context, cfg config.Config, logger *log.Logger) {
 		logger.Printf("WARNING: ingest_token is empty — /api/ingest is unauthenticated")
 	}
 
+	// Authentication (optional, enabled by default): a separate SQLite
+	// user/session db seeded with admin/admin (must-change) on first setup.
+	// Fail closed — if auth is enabled but can't start, don't silently serve
+	// an unauthenticated dashboard.
+	var authn server.Authenticator
+	if cfg.Auth.On() {
+		as, err := auth.Open(cfg.AuthDBPath(), logger)
+		if err != nil {
+			logger.Fatalf("auth: %v", err)
+		}
+		defer as.Close()
+		authn = as
+	} else {
+		logger.Printf("auth: disabled — dashboard served without a login (set auth.enabled=true to require login)")
+	}
+
 	statusFn := func() map[string]any {
 		out := map[string]any{}
 		if awsCol != nil {
@@ -147,7 +164,7 @@ func runServer(ctx context.Context, cfg config.Config, logger *log.Logger) {
 	}
 	srv := &http.Server{
 		Addr:    cfg.Listen,
-		Handler: server.New(st, ls, inv, clusters, hist, statusFn, cfg.IngestToken, web.FS, logger),
+		Handler: server.New(st, ls, inv, clusters, hist, statusFn, cfg.IngestToken, authn, web.FS, logger),
 	}
 	go func() {
 		<-ctx.Done()
