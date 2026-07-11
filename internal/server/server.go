@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/example/awsobs/internal/auth"
 	"github.com/example/awsobs/internal/k8s"
 	"github.com/example/awsobs/internal/logstore"
 	"github.com/example/awsobs/internal/store"
@@ -43,6 +44,14 @@ type Authenticator interface {
 	MustChange(user string) bool
 	SetPassword(user, newPass string) error
 	DeleteSession(token string)
+
+	// multi-user management (admin only, see adminOnly)
+	Role(user string) string
+	ListUsers() ([]auth.User, error)
+	CreateUser(user, pass, role string) error
+	DeleteUser(user string) error
+	ResetPassword(user, newPass string) error
+	SetRole(user, role string) error
 }
 
 type Server struct {
@@ -71,6 +80,13 @@ func New(st *store.Store, ls *logstore.Store, inv *k8s.Inventory, clusters []Clu
 	mux.HandleFunc("POST /api/logout", s.handleLogout)
 	mux.HandleFunc("POST /api/change-password", s.handleChangePassword)
 	mux.HandleFunc("GET /api/me", s.handleMe)
+
+	// User management — admin role only.
+	mux.HandleFunc("GET /api/users", s.adminOnly(s.handleListUsers))
+	mux.HandleFunc("POST /api/users", s.adminOnly(s.handleCreateUser))
+	mux.HandleFunc("DELETE /api/users/{name}", s.adminOnly(s.handleDeleteUser))
+	mux.HandleFunc("POST /api/users/{name}/password", s.adminOnly(s.handleResetUserPassword))
+	mux.HandleFunc("POST /api/users/{name}/role", s.adminOnly(s.handleSetUserRole))
 	assetFS := http.FileServerFS(assets)
 	mux.Handle("GET /styles.css", assetFS)
 	mux.Handle("GET /js/", assetFS)
@@ -354,10 +370,15 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user, ok := s.sessionUser(r)
+	role := ""
+	if ok {
+		role = s.authn.Role(user)
+	}
 	writeJSON(w, map[string]any{
 		"enabled":       true,
 		"authenticated": ok,
 		"user":          user,
+		"role":          role,
 		"must_change":   ok && s.authn.MustChange(user),
 	})
 }
@@ -425,6 +446,105 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.authn.SetPassword(user, body.NewPassword); err != nil {
 		http.Error(w, "could not set password", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+// ---------------------------------------------------------------- user mgmt
+
+// adminOnly restricts a handler to signed-in users with the admin role.
+func (s *Server) adminOnly(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.authn == nil {
+			http.Error(w, "auth disabled", http.StatusNotFound)
+			return
+		}
+		user, ok := s.sessionUser(r)
+		if !ok {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if s.authn.MustChange(user) || s.authn.Role(user) != "admin" {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		next(w, r)
+	}
+}
+
+// badReq writes {ok:false, error} with the given status — used by the mutating
+// user endpoints so the admin UI can surface the reason.
+func badReq(w http.ResponseWriter, status int, msg string) {
+	w.WriteHeader(status)
+	writeJSON(w, map[string]any{"ok": false, "error": msg})
+}
+
+func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
+	users, err := s.authn.ListUsers()
+	if err != nil {
+		http.Error(w, "list error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, users)
+}
+
+func (s *Server) handleCreateUser(w http.ResponseWriter, r *http.Request) {
+	var body struct{ Username, Password, Role string }
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body); err != nil {
+		badReq(w, http.StatusBadRequest, "bad request")
+		return
+	}
+	if body.Role == "" {
+		body.Role = "viewer"
+	}
+	if err := s.authn.CreateUser(body.Username, body.Password, body.Role); err != nil {
+		badReq(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+func (s *Server) handleDeleteUser(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if cur, _ := s.sessionUser(r); cur == name {
+		badReq(w, http.StatusBadRequest, "you cannot delete your own account")
+		return
+	}
+	if err := s.authn.DeleteUser(name); err != nil {
+		badReq(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+func (s *Server) handleResetUserPassword(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	var body struct {
+		NewPassword string `json:"new_password"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body); err != nil {
+		badReq(w, http.StatusBadRequest, "bad request")
+		return
+	}
+	if err := s.authn.ResetPassword(name, body.NewPassword); err != nil {
+		badReq(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+func (s *Server) handleSetUserRole(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	var body struct {
+		Role string `json:"role"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body); err != nil {
+		badReq(w, http.StatusBadRequest, "bad request")
+		return
+	}
+	if err := s.authn.SetRole(name, body.Role); err != nil {
+		badReq(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	writeJSON(w, map[string]any{"ok": true})

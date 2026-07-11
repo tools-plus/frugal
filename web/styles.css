@@ -146,6 +146,37 @@ header h1 span { color: var(--muted); font-weight: 400; }
 #zoom .zlegend .sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; }
 #zoom .zplot { flex: 1; min-height: 0; }
 #zoom .nodata { color: var(--muted); font: 12px var(--mono); padding: 60px 0; text-align: center; }
+
+/* user management modal */
+#users { position: fixed; inset: 0; z-index: 100; display: none; align-items: center; justify-content: center;
+  background: rgba(3, 6, 10, .6); }
+#users.open { display: flex; }
+#users .box { width: min(620px, 92vw); max-height: 82vh; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 12px; display: flex; flex-direction: column; padding: 16px 18px 18px; }
+#users .ubar { display: flex; align-items: center; margin-bottom: 10px; }
+#users .utitle { font-weight: 600; font-size: 15px; }
+#users .uclose { margin-left: auto; background: none; border: 1px solid var(--line); color: var(--muted);
+  border-radius: 6px; width: 28px; height: 28px; cursor: pointer; }
+#users .uclose:hover { color: var(--text); border-color: var(--muted); }
+#users .uerr { color: var(--bad); font: 11px var(--mono); min-height: 14px; margin-bottom: 6px; }
+#users .ulist { overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
+#users .urow { display: flex; align-items: center; gap: 10px; padding: 8px 10px; background: var(--panel-2);
+  border: 1px solid var(--line); border-radius: 8px; }
+#users .uname { flex: 1; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#users .uyou { color: var(--muted); font: 10px var(--mono); }
+#users .upend { color: var(--warn); font: 10px var(--mono); }
+#users select, #users .uadd input { background: var(--panel); border: 1px solid var(--line); color: var(--text);
+  border-radius: 6px; padding: 5px 8px; font: 12px var(--mono); }
+#users .urow button { background: var(--panel); border: 1px solid var(--line); color: var(--muted);
+  border-radius: 6px; padding: 5px 9px; font: 11px var(--mono); cursor: pointer; }
+#users .urow button:hover:not(:disabled) { color: var(--text); border-color: var(--muted); }
+#users .urow button:disabled { opacity: .4; cursor: not-allowed; }
+#users .urow .udel:hover:not(:disabled) { color: var(--bad); border-color: var(--bad); }
+#users .uadd { display: flex; gap: 8px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+#users .uadd input { flex: 1; min-width: 0; }
+#users .uadd button { background: var(--accent); color: #08120f; border: 0; border-radius: 6px; padding: 6px 12px;
+  font-weight: 600; font-size: 12px; cursor: pointer; }
+#users .uadd button:hover { opacity: .92; }
 .empty { color: var(--muted); padding: 70px 20px; text-align: center; font: 13px var(--mono); white-space: pre-line; }
 .u-legend { display: none; }
 

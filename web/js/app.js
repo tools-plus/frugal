@@ -6,6 +6,7 @@ import { S } from "./state.js";
 import { buildRail, buildResList, buildEKSNav, restoreNav } from "./nav.js";
 import { renderMain } from "./charts.js";
 import { connectStream } from "./stream.js";
+import { openUsers } from "./users.js";
 
 // ---------------- inputs ----------------
 document.getElementById("ressearch").addEventListener("input", e => { S.rsearch = e.target.value.toLowerCase(); buildResList(); });
@@ -23,6 +24,11 @@ async function initAuth() {
     location.href = "/login";
   };
   document.getElementById("changepw").onclick = () => { location.href = "/login?change=1"; };
+  if (me.role === "admin") {                       // user management is admin-only
+    const ub = document.getElementById("usersbtn");
+    ub.hidden = false;
+    ub.onclick = () => openUsers(me.user);
+  }
 }
 
 // ---------------- boot ----------------
