@@ -47,11 +47,19 @@ type Authenticator interface {
 
 	// multi-user management (admin only, see adminOnly)
 	Role(user string) string
+	IsAdmin(user string) bool
+	UserAccess(user string) (isAdmin bool, services []string)
 	ListUsers() ([]auth.User, error)
 	CreateUser(user, pass, role string) error
 	DeleteUser(user string) error
 	ResetPassword(user, newPass string) error
 	SetRole(user, role string) error
+
+	// role management (admin only)
+	ListRoles() ([]auth.Role, error)
+	CreateRole(name string, services []string) error
+	UpdateRole(name string, services []string) error
+	DeleteRole(name string) error
 }
 
 type Server struct {
@@ -87,6 +95,10 @@ func New(st *store.Store, ls *logstore.Store, inv *k8s.Inventory, clusters []Clu
 	mux.HandleFunc("DELETE /api/users/{name}", s.adminOnly(s.handleDeleteUser))
 	mux.HandleFunc("POST /api/users/{name}/password", s.adminOnly(s.handleResetUserPassword))
 	mux.HandleFunc("POST /api/users/{name}/role", s.adminOnly(s.handleSetUserRole))
+	mux.HandleFunc("GET /api/roles", s.adminOnly(s.handleListRoles))
+	mux.HandleFunc("POST /api/roles", s.adminOnly(s.handleCreateRole))
+	mux.HandleFunc("POST /api/roles/{name}", s.adminOnly(s.handleUpdateRole))
+	mux.HandleFunc("DELETE /api/roles/{name}", s.adminOnly(s.handleDeleteRole))
 	assetFS := http.FileServerFS(assets)
 	mux.Handle("GET /styles.css", assetFS)
 	mux.Handle("GET /js/", assetFS)
@@ -133,9 +145,18 @@ func writeJSON(w http.ResponseWriter, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 
-// GET /api/series?filter=cw|RDS
+// GET /api/series?filter=cw|RDS — filtered to the services the caller's role
+// allows (admins and auth-disabled see everything).
 func (s *Server) handleSeries(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, s.store.List(r.URL.Query().Get("filter")))
+	_, allow := s.access(r)
+	all := s.store.List(r.URL.Query().Get("filter"))
+	out := make([]store.SeriesMeta, 0, len(all))
+	for _, m := range all {
+		if allow(serviceOf(m.Labels)) {
+			out = append(out, m)
+		}
+	}
+	writeJSON(w, out)
 }
 
 // GET /api/series/data?id=<series id>
@@ -144,6 +165,13 @@ func (s *Server) handleSeriesData(w http.ResponseWriter, r *http.Request) {
 	if id == "" {
 		http.Error(w, "id required", http.StatusBadRequest)
 		return
+	}
+	if isAdmin, allow := s.access(r); !isAdmin {
+		labels, ok := s.store.Labels(id)
+		if !ok || !allow(serviceOf(labels)) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
 	}
 	writeJSON(w, s.store.Data(id))
 }
@@ -167,6 +195,13 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "range too large (max 90 days)", http.StatusBadRequest)
 		return
 	}
+	if isAdmin, allow := s.access(r); !isAdmin {
+		labels, ok := s.store.Labels(id)
+		if !ok || !allow(serviceOf(labels)) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+	}
 	pts, err := s.hist.History(r.Context(), id, time.Unix(from, 0), time.Unix(to, 0))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -181,6 +216,10 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 // GET /api/pods — served from the collectors' shared in-memory inventory
 // (refreshed every poll), so page loads never wait on cluster API calls.
 func (s *Server) handlePods(w http.ResponseWriter, r *http.Request) {
+	if _, allow := s.access(r); !allow("EKS") { // pods belong to the EKS service
+		writeJSON(w, []k8s.PodInfo{})
+		return
+	}
 	if s.inv == nil {
 		writeJSON(w, []k8s.PodInfo{})
 		return
@@ -236,6 +275,7 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 	}
 	ch, cancel := s.store.Subscribe()
 	defer cancel()
+	_, allow := s.access(r) // filter the live fan-out to the caller's services
 
 	heartbeat := time.NewTicker(20 * time.Second)
 	defer heartbeat.Stop()
@@ -248,6 +288,9 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 			fmt.Fprint(w, ": ping\n\n")
 			fl.Flush()
 		case u := <-ch:
+			if !allow(serviceOf(u.Labels)) {
+				continue
+			}
 			b, _ := json.Marshal(u)
 			fmt.Fprintf(w, "event: point\ndata: %s\n\n", b)
 			fl.Flush()
@@ -258,6 +301,10 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 // GET /api/logs?namespace=default&pod=web-abc&container=app&tail=200
 // Streams pod logs as SSE `log` events, one per line.
 func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
+	if _, allow := s.access(r); !allow("EKS") { // pod logs belong to the EKS service
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
 	q := r.URL.Query()
 	ns, pod := q.Get("namespace"), q.Get("pod")
 	kc := s.clusterFor(q.Get("cluster"))
@@ -370,15 +417,17 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user, ok := s.sessionUser(r)
-	role := ""
+	role, isAdmin := "", false
 	if ok {
 		role = s.authn.Role(user)
+		isAdmin = s.authn.IsAdmin(user)
 	}
 	writeJSON(w, map[string]any{
 		"enabled":       true,
 		"authenticated": ok,
 		"user":          user,
 		"role":          role,
+		"is_admin":      isAdmin,
 		"must_change":   ok && s.authn.MustChange(user),
 	})
 }
@@ -465,7 +514,7 @@ func (s *Server) adminOnly(next http.HandlerFunc) http.HandlerFunc {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		if s.authn.MustChange(user) || s.authn.Role(user) != "admin" {
+		if s.authn.MustChange(user) || !s.authn.IsAdmin(user) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
@@ -550,6 +599,54 @@ func (s *Server) handleSetUserRole(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"ok": true})
 }
 
+func (s *Server) handleListRoles(w http.ResponseWriter, r *http.Request) {
+	roles, err := s.authn.ListRoles()
+	if err != nil {
+		http.Error(w, "list error", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, roles)
+}
+
+func (s *Server) handleCreateRole(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name     string   `json:"name"`
+		Services []string `json:"services"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body); err != nil {
+		badReq(w, http.StatusBadRequest, "bad request")
+		return
+	}
+	if err := s.authn.CreateRole(body.Name, body.Services); err != nil {
+		badReq(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+func (s *Server) handleUpdateRole(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Services []string `json:"services"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<16)).Decode(&body); err != nil {
+		badReq(w, http.StatusBadRequest, "bad request")
+		return
+	}
+	if err := s.authn.UpdateRole(r.PathValue("name"), body.Services); err != nil {
+		badReq(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+func (s *Server) handleDeleteRole(w http.ResponseWriter, r *http.Request) {
+	if err := s.authn.DeleteRole(r.PathValue("name")); err != nil {
+		badReq(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
 // auth guards the push endpoints with the shared ingest token.
 func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -612,6 +709,15 @@ func (s *Server) handleAgentLogs(w http.ResponseWriter, r *http.Request) {
 	source := r.URL.Query().Get("source")
 	if source == "" {
 		http.Error(w, "source required", http.StatusBadRequest)
+		return
+	}
+	// host/* logs belong to Hosts; pod/* (the k8s fallback) to EKS.
+	svc := "Hosts"
+	if strings.HasPrefix(source, "pod/") {
+		svc = "EKS"
+	}
+	if _, allow := s.access(r); !allow(svc) {
+		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
 	tail, _ := strconv.Atoi(r.URL.Query().Get("tail"))

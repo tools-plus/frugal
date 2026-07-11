@@ -151,7 +151,7 @@ authenticating ingress as defense in depth.
 ## Authentication
 
 The dashboard is gated by a username/password login, **enabled by default**.
-Users and sessions live in their own SQLite file (`<data_dir>/auth.db`,
+Users, roles, and sessions live in their own SQLite file (`<data_dir>/auth.db`,
 separate from the metrics db), so this is independent of `data_dir` metric
 persistence.
 
@@ -159,11 +159,29 @@ persistence.
   must-change — the first login forces you to set a real password before the
   dashboard is reachable.
 - Passwords are bcrypt-hashed; login issues an `HttpOnly` session cookie
-  (7-day lifetime). Change your password any time from the dashboard header.
+  (7-day lifetime). Change your own password any time from the profile menu.
 - **Disable it** (e.g. behind a trusted VPN, or for local dev) with
   `"auth": { "enabled": false }` — this restores the original open dashboard.
 - `"auth": { "db_path": "..." }` overrides the auth db location (defaults to
   `<data_dir>/auth.db`, or `./awsobs-auth.db` when `data_dir` is unset).
+
+### Users and roles
+
+Admins manage users and roles from the **Admin** menu in the dashboard header
+(the menu only appears for admins; everyone gets a **Profile** menu).
+
+- A **role** is a name plus a set of services (EKS, RDS, S3, …). A user with
+  that role sees **only those services**, read-only. Two roles are built in:
+  `admin` (manage users/roles + see everything) and `viewer` (all services,
+  read-only). Create your own scoped roles (e.g. `db-team` → RDS, DocDB,
+  ElastiCache) and assign them per user.
+- New users are created with a temporary password and must set their own at
+  first login. The built-in `admin` user's role is locked, and the last
+  remaining admin can't be deleted or demoted (lockout protection).
+- Access is enforced **server-side** on every data path — series list,
+  per-series data/history, pods, logs, and the live SSE stream — so a scoped
+  user can't reach another team's services even by calling the API directly.
+  Admins (and auth-disabled mode) bypass the filter.
 
 Agent push endpoints (`/api/ingest*`) are **not** behind the login — they
 authenticate with the shared `ingest_token` bearer token, since agents can't
@@ -181,8 +199,10 @@ with `CGO_ENABLED=1` (the default), same as `data_dir` persistence.
 | `POST /api/login` | authenticate, start a session (sets cookie) |
 | `POST /api/logout` | end the current session |
 | `POST /api/change-password` | set a new password for the logged-in user |
-| `GET /api/me` | auth status: enabled, authenticated, user, must_change |
-| `GET /api/series?filter=` | all known series (id, labels, last value) |
+| `GET /api/me` | auth status: enabled, authenticated, user, role, is_admin, must_change |
+| `GET/POST /api/users`, `DELETE /api/users/{name}`, `POST /api/users/{name}/password`, `.../role` | user management (admin only) |
+| `GET/POST /api/roles`, `POST /api/roles/{name}`, `DELETE /api/roles/{name}` | role management (admin only) |
+| `GET /api/series?filter=` | all known series (id, labels, last value) — filtered to the caller's allowed services |
 | `GET /api/series/data?id=` | full ring buffer for one series |
 | `GET /api/history?id=&from=&to=` | on-demand CloudWatch fetch for long ranges (unix seconds) |
 | `GET /api/stream` | SSE: every new point, as it lands |
@@ -193,8 +213,10 @@ with `CGO_ENABLED=1` (the default), same as `data_dir` persistence.
 | `POST /api/ingest` | agent metric push (bearer token) |
 | `POST /api/ingest/logs` | agent log push (bearer token) |
 
-The read/dashboard endpoints require a valid session cookie when auth is on;
-`/login`, the auth endpoints, and static assets are public.
+The read/dashboard endpoints require a valid session cookie when auth is on (and
+return only the caller's allowed services); the `/api/users*` and `/api/roles*`
+endpoints additionally require an admin. `/login`, `/api/login`, `/api/me`, and
+static assets are public.
 
 Series IDs are pipe-delimited and predictable:
 `k8s|pod|default/web-7f9c|cpu_cores`, `cw|RDS|CPUUtilization|mydb`.

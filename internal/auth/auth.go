@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -36,7 +37,19 @@ CREATE TABLE IF NOT EXISTS sessions (
 	username   TEXT    NOT NULL,
 	expires_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS roles (
+	name     TEXT PRIMARY KEY,
+	is_admin INTEGER NOT NULL DEFAULT 0,      -- admin roles manage users/roles and see everything
+	services TEXT    NOT NULL DEFAULT '[]'    -- JSON array of allowed service keys; ["*"] = all
+);
 `
+
+// allServices is the sentinel in a role's service list meaning "every service".
+const allServices = "*"
+
+// systemUser is the built-in admin account seeded on first setup. Its role is
+// locked so it can't be demoted out of admin (lockout protection).
+const systemUser = "admin"
 
 // SessionTTL is how long a login lasts before re-authentication is required.
 const SessionTTL = 7 * 24 * time.Hour
@@ -74,6 +87,10 @@ func Open(path string, logger *log.Logger) (*Store, error) {
 	if err := s.migrate(); err != nil {
 		sq.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
+	}
+	if err := s.seedRoles(); err != nil {
+		sq.Close()
+		return nil, err
 	}
 	if err := s.seed(); err != nil {
 		sq.Close()
@@ -234,15 +251,153 @@ type User struct {
 	MustChange bool   `json:"must_change"`
 }
 
-func validRole(r string) bool { return r == "admin" || r == "viewer" }
+// Role is a named permission set: an admin role manages users/roles and sees
+// everything; a non-admin role grants view access only to Services (["*"] = all).
+type Role struct {
+	Name     string   `json:"name"`
+	IsAdmin  bool     `json:"is_admin"`
+	Services []string `json:"services"`
+}
 
-// Role returns a user's role ("admin"/"viewer"), or "" if unknown.
+// seedRoles installs the built-in roles on first setup: admin (management +
+// all services) and viewer (all services, read-only).
+func (s *Store) seedRoles() error {
+	var n int
+	if err := s.sql.QueryRow(`SELECT COUNT(*) FROM roles`).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil
+	}
+	all := `["` + allServices + `"]`
+	if _, err := s.sql.Exec(`INSERT INTO roles(name, is_admin, services) VALUES('admin', 1, ?)`, all); err != nil {
+		return err
+	}
+	if _, err := s.sql.Exec(`INSERT INTO roles(name, is_admin, services) VALUES('viewer', 0, ?)`, all); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *Store) roleExists(name string) bool {
+	var n int
+	s.sql.QueryRow(`SELECT COUNT(*) FROM roles WHERE name = ?`, name).Scan(&n)
+	return n > 0
+}
+
+// Role returns a user's role name, or "" if unknown.
 func (s *Store) Role(user string) string {
 	var r string
 	if s.sql.QueryRow(`SELECT role FROM users WHERE username = ?`, user).Scan(&r) != nil {
 		return ""
 	}
 	return r
+}
+
+// IsAdmin reports whether the user's role is an admin role.
+func (s *Store) IsAdmin(user string) bool {
+	var a int
+	if s.sql.QueryRow(`SELECT r.is_admin FROM users u JOIN roles r ON u.role = r.name WHERE u.username = ?`, user).Scan(&a) != nil {
+		return false
+	}
+	return a != 0
+}
+
+// UserAccess returns the effective access for a user: whether they are an admin
+// (sees all + manages), and the list of service keys their role grants (may be
+// ["*"]). Unknown users get no access.
+func (s *Store) UserAccess(user string) (isAdmin bool, services []string) {
+	var a int
+	var svcJSON string
+	if s.sql.QueryRow(`SELECT r.is_admin, r.services FROM users u JOIN roles r ON u.role = r.name WHERE u.username = ?`, user).Scan(&a, &svcJSON) != nil {
+		return false, nil
+	}
+	json.Unmarshal([]byte(svcJSON), &services)
+	return a != 0, services
+}
+
+// ---------------------------------------------------------------- role CRUD
+
+func (s *Store) ListRoles() ([]Role, error) {
+	rows, err := s.sql.Query(`SELECT name, is_admin, services FROM roles ORDER BY is_admin DESC, name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Role
+	for rows.Next() {
+		var r Role
+		var a int
+		var svc string
+		if err := rows.Scan(&r.Name, &a, &svc); err != nil {
+			return nil, err
+		}
+		r.IsAdmin = a != 0
+		json.Unmarshal([]byte(svc), &r.Services)
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// CreateRole adds a non-admin, service-scoped role. (Admin is built-in; new
+// roles grant read access to the listed services.)
+func (s *Store) CreateRole(name string, services []string) error {
+	if name == "" {
+		return fmt.Errorf("role name required")
+	}
+	if name == "admin" || name == "viewer" {
+		return fmt.Errorf("%q is a built-in role", name)
+	}
+	if len(services) == 0 {
+		return fmt.Errorf("choose at least one service")
+	}
+	if s.roleExists(name) {
+		return fmt.Errorf("role %q already exists", name)
+	}
+	svc, _ := json.Marshal(services)
+	_, err := s.sql.Exec(`INSERT INTO roles(name, is_admin, services) VALUES(?, 0, ?)`, name, string(svc))
+	return err
+}
+
+// UpdateRole changes the services of an existing non-admin role. The built-in
+// admin role cannot be edited.
+func (s *Store) UpdateRole(name string, services []string) error {
+	if name == "admin" {
+		return fmt.Errorf("the admin role cannot be edited")
+	}
+	if len(services) == 0 {
+		return fmt.Errorf("choose at least one service")
+	}
+	svc, _ := json.Marshal(services)
+	res, err := s.sql.Exec(`UPDATE roles SET services = ? WHERE name = ? AND is_admin = 0`, string(svc), name)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("unknown role %q", name)
+	}
+	return nil
+}
+
+// DeleteRole removes a role. Built-in roles and roles still assigned to a user
+// cannot be deleted.
+func (s *Store) DeleteRole(name string) error {
+	if name == "admin" || name == "viewer" {
+		return fmt.Errorf("%q is a built-in role", name)
+	}
+	var inUse int
+	s.sql.QueryRow(`SELECT COUNT(*) FROM users WHERE role = ?`, name).Scan(&inUse)
+	if inUse > 0 {
+		return fmt.Errorf("role %q is assigned to %d user(s)", name, inUse)
+	}
+	res, err := s.sql.Exec(`DELETE FROM roles WHERE name = ?`, name)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("unknown role %q", name)
+	}
+	return nil
 }
 
 // ListUsers returns all users ordered by name.
@@ -274,8 +429,8 @@ func (s *Store) CreateUser(username, password, role string) error {
 	if len(password) < 6 {
 		return fmt.Errorf("password must be at least 6 characters")
 	}
-	if !validRole(role) {
-		return fmt.Errorf("invalid role")
+	if !s.roleExists(role) {
+		return fmt.Errorf("unknown role %q", role)
 	}
 	var n int
 	s.sql.QueryRow(`SELECT COUNT(*) FROM users WHERE username = ?`, username).Scan(&n)
@@ -295,7 +450,7 @@ func (s *Store) CreateUser(username, password, role string) error {
 // DeleteUser removes a user and their sessions. The last admin cannot be
 // removed (lockout protection).
 func (s *Store) DeleteUser(username string) error {
-	if s.Role(username) == "admin" && s.adminCount() <= 1 {
+	if s.IsAdmin(username) && s.adminCount() <= 1 {
 		return fmt.Errorf("cannot delete the last admin")
 	}
 	res, err := s.sql.Exec(`DELETE FROM users WHERE username = ?`, username)
@@ -332,10 +487,15 @@ func (s *Store) ResetPassword(username, newPass string) error {
 
 // SetRole changes a user's role. The last admin cannot be demoted.
 func (s *Store) SetRole(username, role string) error {
-	if !validRole(role) {
-		return fmt.Errorf("invalid role")
+	if username == systemUser {
+		return fmt.Errorf("cannot change the role of the built-in %q user", systemUser)
 	}
-	if role != "admin" && s.Role(username) == "admin" && s.adminCount() <= 1 {
+	if !s.roleExists(role) {
+		return fmt.Errorf("unknown role %q", role)
+	}
+	var newIsAdmin int
+	s.sql.QueryRow(`SELECT is_admin FROM roles WHERE name = ?`, role).Scan(&newIsAdmin)
+	if newIsAdmin == 0 && s.IsAdmin(username) && s.adminCount() <= 1 {
 		return fmt.Errorf("cannot demote the last admin")
 	}
 	res, err := s.sql.Exec(`UPDATE users SET role = ? WHERE username = ?`, role, username)
@@ -350,6 +510,6 @@ func (s *Store) SetRole(username, role string) error {
 
 func (s *Store) adminCount() int {
 	var n int
-	s.sql.QueryRow(`SELECT COUNT(*) FROM users WHERE role = 'admin'`).Scan(&n)
+	s.sql.QueryRow(`SELECT COUNT(*) FROM users u JOIN roles r ON u.role = r.name WHERE r.is_admin = 1`).Scan(&n)
 	return n
 }

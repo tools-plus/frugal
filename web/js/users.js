@@ -7,6 +7,7 @@
 
 let root = null;
 let currentUser = "";
+let roleNames = ["viewer", "admin"];   // replaced by /api/roles on refresh
 
 function build() {
   if (root) return root;
@@ -20,7 +21,7 @@ function build() {
       '<form class="uadd" id="uAdd">' +
         '<input id="uName" placeholder="new username" autocomplete="off">' +
         '<input id="uPass" type="password" placeholder="temp password" autocomplete="new-password">' +
-        '<select id="uRole"><option value="viewer">viewer</option><option value="admin">admin</option></select>' +
+        '<select id="uRole"></select>' +
         '<button type="submit">Add user</button>' +
       '</form>' +
     '</div>';
@@ -60,9 +61,23 @@ async function api(method, path, body) {
 
 async function refresh() {
   err("");
-  let users = [];
-  try { users = await fetch("/api/users").then(r => r.json()) || []; }
-  catch { err("could not load users"); return; }
+  let users = [], roles = [];
+  try {
+    [users, roles] = await Promise.all([
+      fetch("/api/users").then(r => r.json()),
+      fetch("/api/roles").then(r => r.json()),
+    ]);
+    users = users || []; roles = roles || [];
+  } catch { err("could not load users"); return; }
+  roleNames = roles.map(r => r.name);
+  // populate the add-user role select
+  const addSel = document.getElementById("uRole");
+  addSel.innerHTML = "";
+  for (const rn of roleNames) {
+    const o = document.createElement("option");
+    o.value = rn; o.textContent = rn; if (rn === "viewer") o.selected = true;
+    addSel.appendChild(o);
+  }
   const list = document.getElementById("uList");
   list.innerHTML = "";
   for (const u of users) {
@@ -72,13 +87,16 @@ async function refresh() {
     row.innerHTML =
       `<span class="uname">${u.username}${self ? ' <span class="uyou">(you)</span>' : ""}` +
       `${u.must_change ? ' <span class="upend">must change pw</span>' : ""}</span>`;
-    // role selector
+    // role selector — locked for the built-in system user (admin)
+    const isSystem = u.username === "admin";
     const roleSel = document.createElement("select");
-    for (const rr of ["viewer", "admin"]) {
+    for (const rr of roleNames) {
       const o = document.createElement("option");
       o.value = rr; o.textContent = rr; if (rr === u.role) o.selected = true;
       roleSel.appendChild(o);
     }
+    roleSel.disabled = isSystem;
+    if (isSystem) roleSel.title = "the built-in admin user's role can't be changed";
     roleSel.onchange = async () => {
       try { await api("POST", `/api/users/${encodeURIComponent(u.username)}/role`, { role: roleSel.value }); await refresh(); }
       catch (e) { err(e.message); await refresh(); }

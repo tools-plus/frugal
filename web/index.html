@@ -13,10 +13,20 @@
   <h1>awsobs <span>/ live infrastructure</span></h1>
   <div class="live"><div class="dot" id="dot"></div><span id="rate">connecting…</span></div>
   <div class="user" id="usermenu" hidden>
-    <span id="username"></span>
-    <button id="usersbtn" title="Manage users" hidden>users</button>
-    <button id="changepw" title="Change password">change password</button>
-    <button id="logout">logout</button>
+    <div class="menu" id="adminMenu" hidden>
+      <button class="menu-btn" id="adminBtn">Admin ▾</button>
+      <div class="menu-pop">
+        <button id="usersItem">users</button>
+        <button id="rolesItem">roles</button>
+      </div>
+    </div>
+    <div class="menu" id="profileMenu">
+      <button class="menu-btn" id="profileBtn"><span id="username"></span> ▾</button>
+      <div class="menu-pop">
+        <button id="changepw">change password</button>
+        <button id="logout">logout</button>
+      </div>
+    </div>
   </div>
 </header>
 

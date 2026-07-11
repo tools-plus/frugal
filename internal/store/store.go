@@ -84,6 +84,17 @@ func (s *Store) Add(id string, labels map[string]string, p Point) {
 	s.publish(Update{ID: id, Labels: labels, Point: p})
 }
 
+// Labels returns a series' labels (used to classify it for access control).
+func (s *Store) Labels(id string) (map[string]string, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	sr, ok := s.series[id]
+	if !ok {
+		return nil, false
+	}
+	return sr.labels, true
+}
+
 // Data returns the points of a series in chronological order.
 func (s *Store) Data(id string) []Point {
 	s.mu.RLock()

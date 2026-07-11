@@ -7,27 +7,45 @@ import { buildRail, buildResList, buildEKSNav, restoreNav } from "./nav.js";
 import { renderMain } from "./charts.js";
 import { connectStream } from "./stream.js";
 import { openUsers } from "./users.js";
+import { openRoles } from "./roles.js";
+import { openChangePassword } from "./account.js";
 
 // ---------------- inputs ----------------
 document.getElementById("ressearch").addEventListener("input", e => { S.rsearch = e.target.value.toLowerCase(); buildResList(); });
 document.getElementById("metricfilter").addEventListener("input", e => { S.mfilter = e.target.value.toLowerCase(); renderMain(); });
 
-// ---------------- auth (header user menu) ----------------
+// ---------------- auth (header dropdowns) ----------------
+function closeMenus() { document.querySelectorAll(".user .menu.open").forEach(m => m.classList.remove("open")); }
+function wireMenu(menuId, btnId) {
+  const menu = document.getElementById(menuId), btn = document.getElementById(btnId);
+  btn.onclick = e => {
+    e.stopPropagation();
+    const open = menu.classList.contains("open");
+    closeMenus();
+    if (!open) menu.classList.add("open");
+  };
+}
+document.addEventListener("click", closeMenus);   // click-away closes any open menu
+
 async function initAuth() {
   let me = {};
   try { me = await fetch("/api/me").then(r => r.json()); } catch { return; }
   if (!me.enabled || !me.authenticated) return;   // auth disabled (or, unexpectedly, not signed in)
   document.getElementById("username").textContent = me.user || "";
   document.getElementById("usermenu").hidden = false;
+
+  wireMenu("profileMenu", "profileBtn");
+  document.getElementById("changepw").onclick = () => { closeMenus(); openChangePassword(); };
   document.getElementById("logout").onclick = async () => {
     try { await fetch("/api/logout", { method: "POST" }); } catch {}
     location.href = "/login";
   };
-  document.getElementById("changepw").onclick = () => { location.href = "/login?change=1"; };
-  if (me.role === "admin") {                       // user management is admin-only
-    const ub = document.getElementById("usersbtn");
-    ub.hidden = false;
-    ub.onclick = () => openUsers(me.user);
+
+  if (me.is_admin) {                               // Admin menu only for admins
+    document.getElementById("adminMenu").hidden = false;
+    wireMenu("adminMenu", "adminBtn");
+    document.getElementById("usersItem").onclick = () => { closeMenus(); openUsers(me.user); };
+    document.getElementById("rolesItem").onclick = () => { closeMenus(); openRoles(); };
   }
 }
 
