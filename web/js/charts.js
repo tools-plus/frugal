@@ -3,7 +3,7 @@
 // of metrics, one uPlot chart per metric. `uPlot` is a global provided by the
 // vendored /vendor/uPlot.iife.min.js loaded before this module.
 
-import { S, MEMBER_CAP, PALETTE, svcOf, loadingOr } from "./state.js";
+import { S, MEMBER_CAP, PALETTE, svcOf, loadingOr, saveNav } from "./state.js";
 import { metricFmt } from "./format.js";
 import { ensureRing, ensureHistory, lastVal, windowed } from "./data.js";
 import { buildPills, buildCtxFilters } from "./nav.js";
@@ -43,6 +43,7 @@ function overlayGroups(metas, nameOf, total) {
 }
 
 export function renderMain() {
+  saveNav();   // persist the current selection so a refresh can restore it
   buildPills(); buildCtxFilters();
   for (const c of S.charts) c.u && c.u.destroy();
   S.charts = []; S.dirty.clear();

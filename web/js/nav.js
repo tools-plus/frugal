@@ -5,7 +5,7 @@
 
 import {
   S, SVCMETA, NS2SVC, RANGES, RING_SPAN, BOOT_T,
-  svcOf, isLive, svcConfigured, loadingOr, KIND_ORDER, KIND_PLURAL,
+  svcOf, isLive, svcConfigured, loadingOr, KIND_ORDER, KIND_PLURAL, loadNav,
 } from "./state.js";
 import { renderMain } from "./charts.js";
 import { closeLogStream } from "./logs.js";
@@ -127,6 +127,33 @@ export function buildResList() {
   }
 }
 export function selectResource(r) { S.resource = r; S.sel = null; buildResList(); renderMain(); }
+
+// Restore the selection saved by saveNav() on the previous session, so a
+// browser refresh returns to the same view instead of the first service.
+// Returns false (→ caller falls back to buildRail's auto-select) when there is
+// nothing valid to restore: no saved state, or the saved service no longer has
+// data (e.g. the server config changed).
+export function restoreNav() {
+  const saved = loadNav();
+  if (!saved || !saved.service) return false;
+  const hasData = [...S.series.values()].some(m => svcOf(m) === saved.service);
+  const eksOK = saved.service === "EKS" && eksClusters().length > 0;
+  if (!hasData && !eksOK) return false;
+
+  S.service = saved.service;
+  if (typeof saved.range === "number") S.range = saved.range;
+  if (saved.service === "EKS" && saved.sel) {
+    S.sel = saved.sel;
+    if (saved.sel.cluster) S.exp.add("c:" + saved.sel.cluster);
+    buildRail(); buildResList(); renderMain();
+  } else if (saved.resource != null) {
+    S.resource = saved.resource;
+    buildRail(); buildResList(); renderMain();
+  } else {
+    selectService(saved.service);
+  }
+  return true;
+}
 
 // ---------------- EKS nav (shallow) ----------------
 export function eksClusters() {

@@ -3,7 +3,7 @@
 // inputs, boots from /api/series + /api/status, and polls /api/pods.
 
 import { S } from "./state.js";
-import { buildRail, buildResList, buildEKSNav } from "./nav.js";
+import { buildRail, buildResList, buildEKSNav, restoreNav } from "./nav.js";
 import { renderMain } from "./charts.js";
 import { connectStream } from "./stream.js";
 
@@ -31,7 +31,7 @@ async function boot() {
     const series = await fetch("/api/series").then(r => r.json());
     for (const m of series) S.series.set(m.id, m);
   } catch (e) { console.error(e); }
-  buildRail();
+  if (!restoreNav()) buildRail();   // restore last view, else auto-select first
   connectStream();
   (async () => { // pods: quick retries while collectors warm up, then steady 30s
     for (let i = 0; i < 4; i++) {

@@ -65,3 +65,19 @@ export function svcOf(meta) {
   return NS2SVC[ns] || ns || "Other";
 }
 export const isLive = svc => !!(SVCMETA[svc] && SVCMETA[svc].live);
+
+// ---------------- nav persistence ----------------
+// The current selection lives only in S, so a browser refresh would reset it.
+// Persist the navigation state (which service/resource/EKS selection + range)
+// to localStorage on every render and restore it on boot — see restoreNav().
+const NAV_KEY = "awsobs.nav";
+export function saveNav() {
+  try {
+    localStorage.setItem(NAV_KEY, JSON.stringify({
+      service: S.service, resource: S.resource, sel: S.sel, range: S.range,
+    }));
+  } catch { /* private mode / disabled storage: fall back to no persistence */ }
+}
+export function loadNav() {
+  try { return JSON.parse(localStorage.getItem(NAV_KEY) || "null"); } catch { return null; }
+}
