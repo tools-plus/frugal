@@ -17,6 +17,7 @@ import (
 	"github.com/example/awsobs/internal/awsdiscovery"
 	"github.com/example/awsobs/internal/awsmetrics"
 	"github.com/example/awsobs/internal/config"
+	"github.com/example/awsobs/internal/piwatch"
 	"github.com/example/awsobs/internal/k8s"
 	"github.com/example/awsobs/internal/logstore"
 	"github.com/example/awsobs/internal/native"
@@ -81,6 +82,15 @@ func (s *Supervisor) Apply(rt config.Runtime) {
 			s.aws = col
 			run(func() { col.Run(ctx) })
 			s.logger.Printf("aws: collector started (region=%q poll=%s)", rt.AWS.Region, rt.AWS.PollInterval())
+
+			// RDS Performance Insights — free DB-load metrics, direct from the
+			// PI API. Runs when RDS is a selected service; only PI-enabled
+			// instances produce data.
+			if namespaceSelected(rt.AWS, "AWS/RDS") {
+				pic := piwatch.New(awsCfg, rt.AWS, s.st, s.logger)
+				run(func() { pic.Run(ctx) })
+				s.logger.Printf("pi: RDS Performance Insights collector started")
+			}
 		}
 	}
 
@@ -135,6 +145,17 @@ func (s *Supervisor) Apply(rt config.Runtime) {
 			s.logger.Printf("k8s(%s): collector started (poll=%s)", cc.Name, rt.Kubernetes.PollInterval())
 		}
 	}
+}
+
+// namespaceSelected reports whether ns is among the AWS namespaces the config
+// would collect (empty config namespaces = all defaults).
+func namespaceSelected(cfg config.AWSConfig, ns string) bool {
+	for _, n := range awsmetrics.EffectiveNamespaces(cfg) {
+		if n == ns {
+			return true
+		}
+	}
+	return false
 }
 
 // mergeTargets combines manually-configured native targets with discovered

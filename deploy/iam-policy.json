@@ -18,6 +18,8 @@
         "ec2:DescribeInstances",
         "rds:DescribeDBInstances",
         "rds:DescribeDBClusters",
+        "pi:GetResourceMetrics",
+        "pi:DescribeDimensionKeys",
         "docdb:DescribeDBClusters",
         "elasticache:DescribeCacheClusters",
         "elasticache:DescribeReplicationGroups",
