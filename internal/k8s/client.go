@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/example/awsobs/internal/config"
@@ -22,10 +23,12 @@ const (
 )
 
 type Client struct {
-	base  string
-	token string
-	http  *http.Client
+	base    string
+	tokenFn func() string // returns the current bearer token ("" = none); called per request so tokens can refresh
+	http    *http.Client
 }
+
+func staticToken(tok string) func() string { return func() string { return tok } }
 
 // NewClient picks an auth mode:
 //  1. explicit api_url from config (with optional bearer token),
@@ -39,7 +42,7 @@ func NewClient(cfg config.ClusterConfig) (*Client, error) {
 	switch {
 	case cfg.APIURL != "":
 		c.base = cfg.APIURL
-		c.token = cfg.BearerToken
+		c.tokenFn = staticToken(cfg.BearerToken)
 		if cfg.InsecureSkipTLSVerify {
 			tr.TLSClientConfig.InsecureSkipVerify = true
 		}
@@ -47,11 +50,11 @@ func NewClient(cfg config.ClusterConfig) (*Client, error) {
 		host := os.Getenv("KUBERNETES_SERVICE_HOST")
 		port := os.Getenv("KUBERNETES_SERVICE_PORT")
 		c.base = "https://" + host + ":" + port
-		tok, err := os.ReadFile(saTokenPath)
-		if err != nil {
-			return nil, fmt.Errorf("in-cluster token: %w", err)
+		// Re-read the token each request — projected ServiceAccount tokens rotate.
+		c.tokenFn = func() string {
+			b, _ := os.ReadFile(saTokenPath)
+			return strings.TrimSpace(string(b))
 		}
-		c.token = string(tok)
 		ca, err := os.ReadFile(saCAPath)
 		if err != nil {
 			return nil, fmt.Errorf("in-cluster CA: %w", err)
@@ -65,6 +68,31 @@ func NewClient(cfg config.ClusterConfig) (*Client, error) {
 	return c, nil
 }
 
+// NewKubeClient builds a client from a kubeconfig-derived cluster: an explicit
+// endpoint + CA, optional client cert, and a token provider (for EKS the
+// provider mints/refreshes a token; for static-token/cert auth it's constant).
+func NewKubeClient(server string, caData, certData, keyData []byte, tokenFn func() string) (*Client, error) {
+	tr := &http.Transport{TLSClientConfig: &tls.Config{}}
+	if len(caData) > 0 {
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(caData) {
+			return nil, fmt.Errorf("invalid CA data")
+		}
+		tr.TLSClientConfig.RootCAs = pool
+	}
+	if len(certData) > 0 && len(keyData) > 0 {
+		cert, err := tls.X509KeyPair(certData, keyData)
+		if err != nil {
+			return nil, fmt.Errorf("client cert: %w", err)
+		}
+		tr.TLSClientConfig.Certificates = []tls.Certificate{cert}
+	}
+	if tokenFn == nil {
+		tokenFn = staticToken("")
+	}
+	return &Client{base: strings.TrimRight(server, "/"), tokenFn: tokenFn, http: &http.Client{Transport: tr}}, nil
+}
+
 func (c *Client) do(ctx context.Context, path string, timeout time.Duration) (*http.Response, error) {
 	if timeout > 0 {
 		var cancel context.CancelFunc
@@ -76,8 +104,10 @@ func (c *Client) do(ctx context.Context, path string, timeout time.Duration) (*h
 	if err != nil {
 		return nil, err
 	}
-	if c.token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.token)
+	if c.tokenFn != nil {
+		if tok := c.tokenFn(); tok != "" {
+			req.Header.Set("Authorization", "Bearer "+tok)
+		}
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {

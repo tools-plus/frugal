@@ -14,7 +14,7 @@ func (s *Store) HasSecretKey() bool { return s.cipher.Available() }
 // secretPtrs returns pointers to every secret string field in a Runtime, so a
 // single pass can encrypt or decrypt them all.
 func secretPtrs(rt *config.Runtime) []*string {
-	ptrs := []*string{&rt.AWS.SecretAccessKey, &rt.AWS.SessionToken, &rt.IngestToken, &rt.Kubernetes.BearerToken}
+	ptrs := []*string{&rt.AWS.SecretAccessKey, &rt.AWS.SessionToken, &rt.IngestToken, &rt.Kubernetes.BearerToken, &rt.Kubernetes.Kubeconfig}
 	for i := range rt.Kubernetes.Clusters {
 		ptrs = append(ptrs, &rt.Kubernetes.Clusters[i].BearerToken)
 	}

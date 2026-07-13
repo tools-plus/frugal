@@ -115,7 +115,8 @@ function render(data) {
   kSec.insertAdjacentHTML("beforeend",
     fieldRow("enabled", `<input type="checkbox" id="k8sEnabled" ${k.enabled ? "checked" : ""}>`) +
     fieldRow("poll interval (s)", `<input id="k8sPoll" type="number" value="${k.poll_interval_seconds || 15}">`) +
-    fieldRow("kubeconfig contexts (comma-sep)", `<input id="k8sCtx" value="${(k.contexts || []).join(", ")}" placeholder="ctx-a, ctx-b or *">`));
+    fieldRow("kubeconfig upload", `<textarea id="k8sKube" rows="4" placeholder="${data.kubeconfig_set ? "kubeconfig stored — paste to replace, blank to keep" : "paste kubeconfig YAML (EKS exec / token / client-cert auth)"}"></textarea>`) +
+    fieldRow("kubeconfig contexts (local dev)", `<input id="k8sCtx" value="${(k.contexts || []).join(", ")}" placeholder="ctx-a, ctx-b or *  (runs kubectl proxy)">`));
   const clSec = listSection("clusters (direct API)", "add cluster", "clList", (ct) => {
     const row = h('<div class="srow"></div>');
     row.appendChild(mkInput("name")); row.appendChild(mkInput("api_url"));
@@ -204,6 +205,7 @@ function collect() {
       },
       kubernetes: {
         enabled: checked("k8sEnabled"), poll_interval_seconds: num("k8sPoll"),
+        kubeconfig: val("k8sKube"),
         contexts: csv("k8sCtx"), clusters: collectTargets("clList").map(c => ({
           name: c.name, api_url: c.api_url, bearer_token: c.bearer_token || "",
         })),

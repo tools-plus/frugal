@@ -699,9 +699,10 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		"has_secret_key":   s.hasKey(),
 		"aws_keys_set":     rt.AWS.SecretAccessKey != "",
 		"ingest_token_set": rt.IngestToken != "",
+		"kubeconfig_set":   rt.Kubernetes.Kubeconfig != "",
 	}
 	// strip secrets before returning
-	rt.AWS.SecretAccessKey, rt.AWS.SessionToken, rt.IngestToken, rt.Kubernetes.BearerToken = "", "", "", ""
+	rt.AWS.SecretAccessKey, rt.AWS.SessionToken, rt.IngestToken, rt.Kubernetes.BearerToken, rt.Kubernetes.Kubeconfig = "", "", "", "", ""
 	for i := range rt.Native.Valkey {
 		rt.Native.Valkey[i].Password = ""
 	}
@@ -759,6 +760,9 @@ func mergeSecrets(in, cur config.Runtime, clearAWSKeys bool) config.Runtime {
 	}
 	if in.IngestToken == "" {
 		in.IngestToken = cur.IngestToken
+	}
+	if in.Kubernetes.Kubeconfig == "" {
+		in.Kubernetes.Kubeconfig = cur.Kubernetes.Kubeconfig
 	}
 	valkey := map[string]string{}
 	for _, t := range cur.Native.Valkey {

@@ -17,6 +17,7 @@ import (
 	"github.com/example/awsobs/internal/awsdiscovery"
 	"github.com/example/awsobs/internal/awsmetrics"
 	"github.com/example/awsobs/internal/config"
+	"github.com/example/awsobs/internal/ekstoken"
 	"github.com/example/awsobs/internal/piwatch"
 	"github.com/example/awsobs/internal/k8s"
 	"github.com/example/awsobs/internal/logstore"
@@ -131,19 +132,85 @@ func (s *Supervisor) Apply(rt config.Runtime) {
 		s.logger.Printf("native: %d target(s) started", n)
 	}
 
-	// Kubernetes — one collector per resolved cluster.
+	// Kubernetes — clusters from an uploaded kubeconfig and/or configured
+	// contexts/direct endpoints. One collector per cluster.
 	if rt.Kubernetes.Enabled {
-		for _, cc := range resolveClusters(ctx, rt.Kubernetes, s.logger) {
-			kc, err := k8s.NewClient(cc)
-			if err != nil {
-				s.logger.Printf("k8s(%s): client disabled: %v", cc.Name, err)
-				continue
-			}
-			s.clusters = append(s.clusters, Cluster{Name: cc.Name, Client: kc})
-			col := k8s.NewCollector(rt.Kubernetes, cc.Name, kc, s.st, s.inv, s.logger)
+		startK8s := func(name string, cl *k8s.Client) {
+			s.clusters = append(s.clusters, Cluster{Name: name, Client: cl})
+			col := k8s.NewCollector(rt.Kubernetes, name, cl, s.st, s.inv, s.logger)
 			run(func() { col.Run(ctx) })
-			s.logger.Printf("k8s(%s): collector started (poll=%s)", cc.Name, rt.Kubernetes.PollInterval())
+			s.logger.Printf("k8s(%s): collector started", name)
 		}
+		kubeconfigSet := rt.Kubernetes.Kubeconfig != ""
+		if kubeconfigSet {
+			for _, kc := range parseKube(rt.Kubernetes.Kubeconfig, s.logger) {
+				tokenFn := staticTok(kc.Token)
+				if kc.EKSClusterName != "" { // EKS exec auth → mint tokens ourselves
+					if !awsOK {
+						s.logger.Printf("k8s(%s): EKS kubeconfig needs AWS credentials — skipped", kc.Name)
+						continue
+					}
+					ac := awsCfg
+					if kc.Region != "" && kc.Region != ac.Region {
+						ac = awsCfg.Copy()
+						ac.Region = kc.Region
+					}
+					tokenFn = eksTokenFn(ctx, ac, kc.EKSClusterName, s.logger)
+				}
+				cl, err := k8s.NewKubeClient(kc.Server, kc.CAData, kc.ClientCertData, kc.ClientKeyData, tokenFn)
+				if err != nil {
+					s.logger.Printf("k8s(%s): %v", kc.Name, err)
+					continue
+				}
+				startK8s(kc.Name, cl)
+			}
+		}
+		// Contexts / direct clusters — plus the in-cluster/proxy fallback, but
+		// only when nothing else (contexts, direct clusters, or kubeconfig) is set.
+		if len(rt.Kubernetes.Contexts) > 0 || len(rt.Kubernetes.Clusters) > 0 || !kubeconfigSet {
+			for _, cc := range resolveClusters(ctx, rt.Kubernetes, s.logger) {
+				cl, err := k8s.NewClient(cc)
+				if err != nil {
+					s.logger.Printf("k8s(%s): client disabled: %v", cc.Name, err)
+					continue
+				}
+				startK8s(cc.Name, cl)
+			}
+		}
+	}
+}
+
+func staticTok(tok string) func() string { return func() string { return tok } }
+
+// parseKube parses the uploaded kubeconfig, logging (not failing) on error.
+func parseKube(kubeconfig string, logger *log.Logger) []k8s.KubeCluster {
+	kcs, err := k8s.ParseKubeconfig([]byte(kubeconfig))
+	if err != nil {
+		logger.Printf("k8s: kubeconfig parse: %v", err)
+		return nil
+	}
+	return kcs
+}
+
+// eksTokenFn returns a bearer-token provider that mints (and caches for ~12m,
+// under the ~15m EKS token lifetime) an EKS token for the cluster.
+func eksTokenFn(ctx context.Context, ac aws.Config, cluster string, logger *log.Logger) func() string {
+	var mu sync.Mutex
+	var tok string
+	var exp time.Time
+	return func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		if tok != "" && time.Now().Before(exp) {
+			return tok
+		}
+		t, err := ekstoken.Token(ctx, ac, cluster)
+		if err != nil {
+			logger.Printf("k8s: eks token(%s): %v", cluster, err)
+			return tok
+		}
+		tok, exp = t, time.Now().Add(12*time.Minute)
+		return tok
 	}
 }
 

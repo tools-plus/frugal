@@ -33,6 +33,10 @@ type K8sConfig struct {
 	// Clusters are direct API endpoints (your own proxy, or api_url +
 	// bearer_token). Can be combined with contexts.
 	Clusters []ClusterConfig `json:"clusters"`
+	// Kubeconfig is an uploaded kubeconfig (YAML). Each context becomes a
+	// collected cluster; EKS exec-auth contexts are authenticated with tokens
+	// awsobs mints from the configured AWS credentials. Encrypted at rest.
+	Kubeconfig string `json:"kubeconfig"`
 
 	// Legacy single-cluster fields (used only when clusters is empty).
 	Name                  string `json:"cluster_name"`

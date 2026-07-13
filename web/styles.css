@@ -266,6 +266,10 @@ header h1 span { color: var(--muted); font-weight: 400; }
 #settings .sfield > span { width: 200px; flex: none; color: var(--muted); }
 #settings .sfield input[type="text"], #settings .sfield input[type="password"], #settings .sfield input[type="number"], #settings .sfield input:not([type]) {
   flex: 1; background: var(--panel); border: 1px solid var(--line); color: var(--text); border-radius: 6px; padding: 6px 9px; font: 12px var(--mono); }
+#settings .sfield textarea { flex: 1; background: var(--panel); border: 1px solid var(--line); color: var(--text);
+  border-radius: 6px; padding: 6px 9px; font: 11px var(--mono); resize: vertical; }
+#settings .sfield { align-items: flex-start; }
+#settings .sfield > span { padding-top: 6px; }
 #settings .snsgrid { flex: 1; display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px 10px; }
 #settings .snsgrid .scbx { color: var(--text); }
 #settings .slist { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
