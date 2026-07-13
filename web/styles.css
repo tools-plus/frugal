@@ -243,6 +243,45 @@ header h1 span { color: var(--muted); font-weight: 400; }
   border-radius: 6px; padding: 6px 12px; font: 12px var(--mono); cursor: pointer; }
 #account .aactions button.primary { background: var(--accent); color: #08120f; border: 0; font-weight: 600; }
 #account .aactions button:hover { opacity: .92; }
+
+/* settings modal */
+#settings { position: fixed; inset: 0; z-index: 100; display: none; align-items: center; justify-content: center;
+  background: rgba(3, 6, 10, .6); }
+#settings.open { display: flex; }
+#settings .box { width: min(720px, 94vw); height: min(760px, 90vh); background: var(--panel); border: 1px solid var(--line);
+  border-radius: 12px; display: flex; flex-direction: column; padding: 16px 18px 14px; }
+#settings .sbar { display: flex; align-items: baseline; gap: 10px; margin-bottom: 8px; }
+#settings .stitle { font-weight: 600; font-size: 15px; }
+#settings .ssub { color: var(--muted); font: 11px var(--mono); }
+#settings .sclose { margin-left: auto; background: none; border: 1px solid var(--line); color: var(--muted);
+  border-radius: 6px; width: 28px; height: 28px; cursor: pointer; align-self: center; }
+#settings .sclose:hover { color: var(--text); border-color: var(--muted); }
+#settings .skeywarn { background: rgba(232,163,61,.12); border: 1px solid var(--warn); color: var(--warn);
+  border-radius: 7px; padding: 7px 10px; font: 11px var(--mono); margin-bottom: 8px; }
+#settings .serr { color: var(--bad); font: 11px var(--mono); min-height: 14px; }
+#settings .sbody { overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 14px; padding-right: 4px; }
+#settings .ssec { border: 1px solid var(--line); border-radius: 8px; padding: 12px; background: var(--panel-2); }
+#settings .ssec-h { font-weight: 600; font-size: 12.5px; margin-bottom: 8px; }
+#settings .sfield { display: flex; align-items: center; gap: 10px; margin-bottom: 7px; font: 12px var(--sans); }
+#settings .sfield > span { width: 200px; flex: none; color: var(--muted); }
+#settings .sfield input[type="text"], #settings .sfield input[type="password"], #settings .sfield input[type="number"], #settings .sfield input:not([type]) {
+  flex: 1; background: var(--panel); border: 1px solid var(--line); color: var(--text); border-radius: 6px; padding: 6px 9px; font: 12px var(--mono); }
+#settings .snsgrid { flex: 1; display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px 10px; }
+#settings .snsgrid .scbx { color: var(--text); }
+#settings .slist { display: flex; flex-direction: column; gap: 6px; margin-bottom: 8px; }
+#settings .srow { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+#settings .srow input { background: var(--panel); border: 1px solid var(--line); color: var(--text); border-radius: 6px; padding: 5px 8px; font: 12px var(--mono); flex: 1; min-width: 90px; }
+#settings .scbx { display: flex; align-items: center; gap: 4px; font: 11px var(--mono); color: var(--muted); flex: none; }
+#settings .srm { background: none; border: 1px solid var(--line); color: var(--muted); border-radius: 6px; padding: 4px 8px; font: 11px var(--mono); cursor: pointer; flex: none; }
+#settings .srm:hover { color: var(--bad); border-color: var(--bad); }
+#settings .sadd, #settings .sclrkeys, #settings .sgen { background: var(--panel); border: 1px solid var(--line); color: var(--muted);
+  border-radius: 6px; padding: 5px 10px; font: 11px var(--mono); cursor: pointer; }
+#settings .sadd:hover, #settings .sclrkeys:hover, #settings .sgen:hover { color: var(--text); border-color: var(--muted); }
+#settings .sactions { display: flex; gap: 8px; justify-content: flex-end; padding-top: 12px; }
+#settings .sactions button { background: var(--panel-2); border: 1px solid var(--line); color: var(--muted);
+  border-radius: 6px; padding: 7px 14px; font: 12px var(--mono); cursor: pointer; }
+#settings .sactions button.primary { background: var(--accent); color: #08120f; border: 0; font-weight: 600; }
+#settings .sactions button:hover { opacity: .92; }
 .empty { color: var(--muted); padding: 70px 20px; text-align: center; font: 13px var(--mono); white-space: pre-line; }
 .u-legend { display: none; }
 

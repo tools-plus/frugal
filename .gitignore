@@ -4,3 +4,4 @@ server.json
 agent.json
 .snapshot
 .playwright-mcp/
+.env

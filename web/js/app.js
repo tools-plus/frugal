@@ -9,6 +9,7 @@ import { connectStream } from "./stream.js";
 import { openUsers } from "./users.js";
 import { openRoles } from "./roles.js";
 import { openChangePassword } from "./account.js";
+import { openSettings } from "./settings.js";
 
 // ---------------- inputs ----------------
 document.getElementById("ressearch").addEventListener("input", e => { S.rsearch = e.target.value.toLowerCase(); buildResList(); });
@@ -44,6 +45,7 @@ async function initAuth() {
   if (me.is_admin) {                               // Admin menu only for admins
     document.getElementById("adminMenu").hidden = false;
     wireMenu("adminMenu", "adminBtn");
+    document.getElementById("settingsItem").onclick = () => { closeMenus(); openSettings(); };
     document.getElementById("usersItem").onclick = () => { closeMenus(); openUsers(me.user); };
     document.getElementById("rolesItem").onclick = () => { closeMenus(); openRoles(); };
   }

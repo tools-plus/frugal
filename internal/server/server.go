@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/example/awsobs/internal/auth"
+	"github.com/example/awsobs/internal/config"
 	"github.com/example/awsobs/internal/k8s"
 	"github.com/example/awsobs/internal/logstore"
 	"github.com/example/awsobs/internal/store"
@@ -62,22 +63,54 @@ type Authenticator interface {
 	DeleteRole(name string) error
 }
 
+// Deps are the web server's dependencies. Collector-derived values (clusters,
+// historian, status, ingest token) are getters because the collector service
+// is reconfigured at runtime; the auth store is always present (it also holds
+// config), and AuthEnabled toggles whether the login is enforced.
+type Deps struct {
+	Store        *store.Store
+	Logs         *logstore.Store
+	Inv          *k8s.Inventory
+	Clusters     func() []Cluster
+	Hist         func() Historian
+	Status       func() map[string]any
+	IngestToken  func() string
+	Authn        Authenticator
+	AuthEnabled  bool
+	GetConfig    func() (config.Runtime, error)
+	SaveConfig   func(config.Runtime) error // persists + re-applies collectors
+	HasSecretKey func() bool
+	Assets       embed.FS
+	Logger       *log.Logger
+}
+
 type Server struct {
 	store       *store.Store
 	logs        *logstore.Store
 	inv         *k8s.Inventory
-	clusters    []Cluster     // empty when kubernetes collection is disabled
-	hist        Historian     // nil when the AWS collector is disabled
-	authn       Authenticator // nil when authentication is disabled
-	status      func() map[string]any
-	ingestToken string
+	getClusters func() []Cluster
+	getHist     func() Historian
+	getStatus   func() map[string]any
+	ingestToken func() string
+	authn       Authenticator // always non-nil (control store)
+	authEnabled bool           // whether the login is enforced
+	getConfig   func() (config.Runtime, error)
+	saveConfig  func(config.Runtime) error
+	hasKey      func() bool
 	logger      *log.Logger
 	assets      embed.FS
 	mux         *http.ServeMux
 }
 
-func New(st *store.Store, ls *logstore.Store, inv *k8s.Inventory, clusters []Cluster, hist Historian, status func() map[string]any, ingestToken string, authn Authenticator, assets embed.FS, logger *log.Logger) *Server {
-	s := &Server{store: st, logs: ls, inv: inv, clusters: clusters, hist: hist, authn: authn, status: status, ingestToken: ingestToken, logger: logger, assets: assets}
+func New(d Deps) *Server {
+	s := &Server{
+		store: d.Store, logs: d.Logs, inv: d.Inv,
+		getClusters: d.Clusters, getHist: d.Hist, getStatus: d.Status, ingestToken: d.IngestToken,
+		authn: d.Authn, authEnabled: d.AuthEnabled,
+		getConfig: d.GetConfig, saveConfig: d.SaveConfig, hasKey: d.HasSecretKey,
+		logger: d.Logger, assets: d.Assets,
+	}
+	assets := d.Assets
 	mux := http.NewServeMux()
 
 	// Public: the login page, the auth endpoints, and static assets (JS/CSS
@@ -99,6 +132,8 @@ func New(st *store.Store, ls *logstore.Store, inv *k8s.Inventory, clusters []Clu
 	mux.HandleFunc("POST /api/roles", s.adminOnly(s.handleCreateRole))
 	mux.HandleFunc("POST /api/roles/{name}", s.adminOnly(s.handleUpdateRole))
 	mux.HandleFunc("DELETE /api/roles/{name}", s.adminOnly(s.handleDeleteRole))
+	mux.HandleFunc("GET /api/settings", s.adminOnly(s.handleGetSettings))
+	mux.HandleFunc("POST /api/settings", s.adminOnly(s.handleSaveSettings))
 	assetFS := http.FileServerFS(assets)
 	mux.Handle("GET /styles.css", assetFS)
 	mux.Handle("GET /js/", assetFS)
@@ -179,7 +214,8 @@ func (s *Server) handleSeriesData(w http.ResponseWriter, r *http.Request) {
 // GET /api/history?id=<series id>&from=<unix>&to=<unix>
 // Fetches straight from CloudWatch — for ranges beyond the ring buffer.
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
-	if s.hist == nil {
+	hist := s.getHist()
+	if hist == nil {
 		http.Error(w, "history unavailable (aws collector disabled)", http.StatusServiceUnavailable)
 		return
 	}
@@ -202,7 +238,7 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	pts, err := s.hist.History(r.Context(), id, time.Unix(from, 0), time.Unix(to, 0))
+	pts, err := hist.History(r.Context(), id, time.Unix(from, 0), time.Unix(to, 0))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
@@ -230,11 +266,12 @@ func (s *Server) handlePods(w http.ResponseWriter, r *http.Request) {
 // GET /api/status — collector health for debugging "why is X empty".
 func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 	out := map[string]any{}
-	if s.status != nil {
-		out = s.status()
+	if s.getStatus != nil {
+		out = s.getStatus()
 	}
-	names := make([]string, 0, len(s.clusters))
-	for _, c := range s.clusters {
+	clusters := s.getClusters()
+	names := make([]string, 0, len(clusters))
+	for _, c := range clusters {
 		names = append(names, c.Name)
 	}
 	out["clusters"] = names
@@ -244,13 +281,14 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 // clusterFor returns the client for a named cluster (or the first one).
 func (s *Server) clusterFor(name string) *k8s.Client {
-	for _, c := range s.clusters {
+	clusters := s.getClusters()
+	for _, c := range clusters {
 		if c.Name == name {
 			return c.Client
 		}
 	}
-	if len(s.clusters) > 0 && name == "" {
-		return s.clusters[0].Client
+	if len(clusters) > 0 && name == "" {
+		return clusters[0].Client
 	}
 	return nil
 }
@@ -383,7 +421,7 @@ func clearSessionCookie(w http.ResponseWriter) {
 // bypass the forced password change). No-op when auth is disabled.
 func (s *Server) gate(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if s.authn == nil {
+		if !s.authEnabled {
 			next(w, r)
 			return
 		}
@@ -412,7 +450,7 @@ func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
 
 // GET /api/me — auth status for the login page and dashboard header.
 func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
-	if s.authn == nil {
+	if !s.authEnabled {
 		writeJSON(w, map[string]any{"enabled": false})
 		return
 	}
@@ -434,7 +472,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 
 // POST /api/login — validate credentials and start a session.
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
-	if s.authn == nil {
+	if !s.authEnabled {
 		http.Error(w, "auth disabled", http.StatusNotFound)
 		return
 	}
@@ -472,7 +510,7 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 // POST /api/change-password — set a new password for the logged-in user
 // (also completes the forced change for a seeded account).
 func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
-	if s.authn == nil {
+	if !s.authEnabled {
 		http.Error(w, "auth disabled", http.StatusNotFound)
 		return
 	}
@@ -505,8 +543,8 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 // adminOnly restricts a handler to signed-in users with the admin role.
 func (s *Server) adminOnly(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if s.authn == nil {
-			http.Error(w, "auth disabled", http.StatusNotFound)
+		if !s.authEnabled { // auth off: admin surfaces are open (consistent with data access)
+			next(w, r)
 			return
 		}
 		user, ok := s.sessionUser(r)
@@ -647,12 +685,126 @@ func (s *Server) handleDeleteRole(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"ok": true})
 }
 
+// ---------------------------------------------------------------- settings
+
+// GET /api/settings — current runtime config with secrets stripped (write-only)
+// plus flags indicating which secrets are set.
+func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
+	rt, err := s.getConfig()
+	if err != nil {
+		http.Error(w, "config error", http.StatusInternalServerError)
+		return
+	}
+	resp := map[string]any{
+		"has_secret_key":   s.hasKey(),
+		"aws_keys_set":     rt.AWS.SecretAccessKey != "",
+		"ingest_token_set": rt.IngestToken != "",
+	}
+	// strip secrets before returning
+	rt.AWS.SecretAccessKey, rt.AWS.SessionToken, rt.IngestToken, rt.Kubernetes.BearerToken = "", "", "", ""
+	for i := range rt.Native.Valkey {
+		rt.Native.Valkey[i].Password = ""
+	}
+	for i := range rt.Native.OpenSearch {
+		rt.Native.OpenSearch[i].Password = ""
+	}
+	for i := range rt.Native.RabbitMQ {
+		rt.Native.RabbitMQ[i].Password = ""
+	}
+	for i := range rt.Kubernetes.Clusters {
+		rt.Kubernetes.Clusters[i].BearerToken = ""
+	}
+	resp["config"] = rt
+	writeJSON(w, resp)
+}
+
+// POST /api/settings — validate, merge blank secrets with existing, persist,
+// and re-apply the collector service. `clear_aws_keys` reverts AWS to the
+// default credential chain (IRSA/env).
+func (s *Server) handleSaveSettings(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Config       config.Runtime `json:"config"`
+		ClearAWSKeys bool           `json:"clear_aws_keys"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
+		badReq(w, http.StatusBadRequest, "bad request")
+		return
+	}
+	cur, err := s.getConfig()
+	if err != nil {
+		badReq(w, http.StatusInternalServerError, "config error")
+		return
+	}
+	rt := mergeSecrets(body.Config, cur, body.ClearAWSKeys)
+	if err := s.saveConfig(rt); err != nil { // persists (encrypts) + re-applies collectors
+		badReq(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+// mergeSecrets fills blank secret fields in `in` from the current config so the
+// UI can omit unchanged secrets. Same-named native targets / clusters keep
+// their stored password/token when the incoming one is blank.
+func mergeSecrets(in, cur config.Runtime, clearAWSKeys bool) config.Runtime {
+	if clearAWSKeys {
+		in.AWS.AccessKeyID, in.AWS.SecretAccessKey, in.AWS.SessionToken = "", "", ""
+	} else {
+		if in.AWS.SecretAccessKey == "" {
+			in.AWS.SecretAccessKey = cur.AWS.SecretAccessKey
+		}
+		if in.AWS.SessionToken == "" {
+			in.AWS.SessionToken = cur.AWS.SessionToken
+		}
+	}
+	if in.IngestToken == "" {
+		in.IngestToken = cur.IngestToken
+	}
+	valkey := map[string]string{}
+	for _, t := range cur.Native.Valkey {
+		valkey[t.Name] = t.Password
+	}
+	for i := range in.Native.Valkey {
+		if in.Native.Valkey[i].Password == "" {
+			in.Native.Valkey[i].Password = valkey[in.Native.Valkey[i].Name]
+		}
+	}
+	opensearch := map[string]string{}
+	for _, t := range cur.Native.OpenSearch {
+		opensearch[t.Name] = t.Password
+	}
+	for i := range in.Native.OpenSearch {
+		if in.Native.OpenSearch[i].Password == "" {
+			in.Native.OpenSearch[i].Password = opensearch[in.Native.OpenSearch[i].Name]
+		}
+	}
+	rabbit := map[string]string{}
+	for _, t := range cur.Native.RabbitMQ {
+		rabbit[t.Name] = t.Password
+	}
+	for i := range in.Native.RabbitMQ {
+		if in.Native.RabbitMQ[i].Password == "" {
+			in.Native.RabbitMQ[i].Password = rabbit[in.Native.RabbitMQ[i].Name]
+		}
+	}
+	clusters := map[string]string{}
+	for _, c := range cur.Kubernetes.Clusters {
+		clusters[c.Name] = c.BearerToken
+	}
+	for i := range in.Kubernetes.Clusters {
+		if in.Kubernetes.Clusters[i].BearerToken == "" {
+			in.Kubernetes.Clusters[i].BearerToken = clusters[in.Kubernetes.Clusters[i].Name]
+		}
+	}
+	return in
+}
+
 // auth guards the push endpoints with the shared ingest token.
 func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if s.ingestToken != "" {
+		if tok := s.ingestToken(); tok != "" {
 			got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-			if subtle.ConstantTimeCompare([]byte(got), []byte(s.ingestToken)) != 1 {
+			if subtle.ConstantTimeCompare([]byte(got), []byte(tok)) != 1 {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}

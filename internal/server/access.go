@@ -42,7 +42,7 @@ func serviceOf(labels map[string]string) string {
 // allowed. Callers are gated handlers, so a valid session is expected; a
 // missing one denies everything defensively.
 func (s *Server) access(r *http.Request) (isAdmin bool, allow func(string) bool) {
-	if s.authn == nil {
+	if !s.authEnabled {
 		return true, func(string) bool { return true }
 	}
 	user, ok := s.sessionUser(r)

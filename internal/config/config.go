@@ -60,6 +60,12 @@ type AWSConfig struct {
 	Enabled bool   `json:"enabled"`
 	Region  string `json:"region"`
 	Profile string `json:"profile"`
+	// Static credentials (optional). When empty, the default AWS credential
+	// chain is used (env vars, shared config, SSO, EC2/EKS instance role/IRSA).
+	// SecretAccessKey and SessionToken are encrypted at rest.
+	AccessKeyID     string `json:"access_key_id"`
+	SecretAccessKey string `json:"secret_access_key"`
+	SessionToken    string `json:"session_token"`
 	// Namespaces limits which CloudWatch namespaces are collected.
 	// Empty means all built-in defaults (EC2, RDS, ElastiCache, AmazonMQ,
 	// ES, S3, ApplicationELB, NetworkELB).
@@ -150,6 +156,38 @@ type Config struct {
 	DataDir string `json:"data_dir"`
 	// DBRetentionHours bounds how much point history SQLite keeps (default 72).
 	DBRetentionHours int `json:"db_retention_hours"`
+	// SecretKey encrypts credentials stored in the control DB (AWS keys, native
+	// passwords, ingest token). Keep it out of source control; the env var
+	// AWSOBS_SECRET_KEY overrides this and is preferable in production.
+	SecretKey string `json:"secret_key"`
+}
+
+// Runtime is the operational config that lives in the control DB and is
+// editable at runtime from the admin UI (as opposed to the bootstrap fields —
+// listen, data_dir, auth — which stay in server.json / env). Secret fields
+// within it are encrypted at rest.
+type Runtime struct {
+	AWS               AWSConfig    `json:"aws"`
+	Kubernetes        K8sConfig    `json:"kubernetes"`
+	Native            NativeConfig `json:"native"`
+	IngestToken       string       `json:"ingest_token"`
+	RetentionCap      int          `json:"retention_points"`
+	LogRetentionLines int          `json:"log_retention_lines"`
+	DBRetentionHours  int          `json:"db_retention_hours"`
+}
+
+// ToRuntime extracts the runtime subset of a Config — used to seed the control
+// DB from server.json on first boot (migration).
+func (c Config) ToRuntime() Runtime {
+	return Runtime{
+		AWS:               c.AWS,
+		Kubernetes:        c.Kubernetes,
+		Native:            c.Native,
+		IngestToken:       c.IngestToken,
+		RetentionCap:      c.RetentionCap,
+		LogRetentionLines: c.LogRetentionLines,
+		DBRetentionHours:  c.DBRetentionHours,
+	}
 }
 
 func Default() Config {
@@ -185,8 +223,23 @@ func Load(path string) (Config, error) {
 			return cfg, fmt.Errorf("parse config: %w", err)
 		}
 	}
+	// Bootstrap keys: each server.json field can also come from the environment,
+	// which wins over the file.
 	if v := os.Getenv("AWSOBS_LISTEN"); v != "" {
 		cfg.Listen = v
+	}
+	if v := os.Getenv("AWSOBS_DATA_DIR"); v != "" {
+		cfg.DataDir = v
+	}
+	if v := os.Getenv("AWSOBS_SECRET_KEY"); v != "" {
+		cfg.SecretKey = v
+	}
+	if v := os.Getenv("AWSOBS_AUTH_ENABLED"); v != "" {
+		b := v == "true" || v == "1"
+		cfg.Auth.Enabled = &b
+	}
+	if v := os.Getenv("AWSOBS_AUTH_DB_PATH"); v != "" {
+		cfg.Auth.DBPath = v
 	}
 	// Env overrides file — an explicitly exported AWS_REGION/AWS_PROFILE
 	// should always win over a copied example config.

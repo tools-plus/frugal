@@ -16,6 +16,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awscfg "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatch"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatch/types"
 
@@ -231,9 +232,20 @@ func New(ctx context.Context, cfg config.AWSConfig, st *store.Store, logger *log
 	if cfg.Profile != "" {
 		opts = append(opts, awscfg.WithSharedConfigProfile(cfg.Profile))
 	}
+	// UI-provided static keys take precedence; otherwise fall back to the
+	// default credential chain (env / shared config / SSO / EC2/EKS role/IRSA).
+	if cfg.AccessKeyID != "" && cfg.SecretAccessKey != "" {
+		opts = append(opts, awscfg.WithCredentialsProvider(
+			credentials.NewStaticCredentialsProvider(cfg.AccessKeyID, cfg.SecretAccessKey, cfg.SessionToken)))
+	}
 	ac, err := awscfg.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("aws config: %w", err)
+	}
+	// Confirm credentials actually resolve, so the collector only starts "when
+	// credentials are available" — otherwise report clearly and stay down.
+	if _, err := ac.Credentials.Retrieve(ctx); err != nil {
+		return nil, fmt.Errorf("no aws credentials available: %w", err)
 	}
 	return &Collector{
 		cfg:    cfg,

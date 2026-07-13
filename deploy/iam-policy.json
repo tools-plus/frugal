@@ -1,0 +1,44 @@
+{
+  "Version": "2012-10-17",
+  "Comment": "Read-only IAM policy for awsobs. Attach to the IAM user whose access keys you enter in Admin > Settings, or to the IRSA/instance role the server runs under. All actions are read/list/describe only. Add services here as awsobs grows (e.g. lambda:ListFunctions, ses:GetSendStatistics).",
+  "Statement": [
+    {
+      "Sid": "CloudWatchMetrics",
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:ListMetrics",
+        "cloudwatch:GetMetricData"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ServiceDiscoveryAndInventory",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeInstances",
+        "rds:DescribeDBInstances",
+        "rds:DescribeDBClusters",
+        "docdb:DescribeDBClusters",
+        "elasticache:DescribeCacheClusters",
+        "elasticache:DescribeReplicationGroups",
+        "es:ListDomainNames",
+        "es:DescribeDomains",
+        "mq:ListBrokers",
+        "mq:DescribeBroker",
+        "s3:ListAllMyBuckets",
+        "elasticloadbalancing:DescribeLoadBalancers",
+        "elasticloadbalancing:DescribeTargetGroups"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "EKSDiscovery",
+      "Effect": "Allow",
+      "Action": [
+        "eks:ListClusters",
+        "eks:DescribeCluster"
+      ],
+      "Resource": "*"
+    }
+  ]
+}

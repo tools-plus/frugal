@@ -1,12 +1,14 @@
 // awsobs — a single-binary AWS + EKS observability tool with two modes:
 //
-//	awsobs server -config config.json   # collectors + dashboard (default)
+//	awsobs server -config config.json   # web dashboard + data collectors
 //	awsobs agent  -config agent.json    # push host metrics/logs to a server
 //
-// The server collects CloudWatch metrics for managed services, native
-// metrics straight from Valkey/OpenSearch/RabbitMQ endpoints (free,
-// in-VPC), live pod/node metrics + logs from EKS, and receives pushes
-// from agents. Agents run on EC2 instances or as an EKS DaemonSet.
+// In server mode the binary runs in two parts: Part 1, the web server, comes up
+// immediately from bootstrap config (listen, data_dir, auth). Part 2, the data
+// collection service, is supervised — it starts from the runtime config stored
+// (encrypted) in the control DB and is torn down + relaunched on reconfigure,
+// without restarting Part 1. Runtime config (AWS/k8s/native, credentials,
+// retention, ingest token) is edited from the admin UI, not server.json.
 package main
 
 import (
@@ -17,17 +19,18 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
 	"github.com/example/awsobs/internal/agent"
 	"github.com/example/awsobs/internal/auth"
-	"github.com/example/awsobs/internal/awsmetrics"
+	"github.com/example/awsobs/internal/collector"
 	"github.com/example/awsobs/internal/config"
 	"github.com/example/awsobs/internal/db"
 	"github.com/example/awsobs/internal/k8s"
 	"github.com/example/awsobs/internal/logstore"
-	"github.com/example/awsobs/internal/native"
+	"github.com/example/awsobs/internal/secret"
 	"github.com/example/awsobs/internal/server"
 	"github.com/example/awsobs/internal/store"
 	"github.com/example/awsobs/web"
@@ -64,107 +67,123 @@ func main() {
 }
 
 func runServer(ctx context.Context, cfg config.Config, logger *log.Logger) {
-	st := store.New(cfg.RetentionCap)
-	ls := logstore.New(cfg.LogRetentionLines)
+	// Control DB (always present): users, roles, sessions, and the encrypted
+	// runtime config. The master key comes from the environment.
+	cipher := secret.New(cfg.SecretKey)
+	if !cipher.Available() {
+		logger.Printf("WARNING: no secret_key set (server.json secret_key or AWSOBS_SECRET_KEY) — credentials can't be stored or used until it is")
+	}
+	ctrl, err := auth.Open(cfg.AuthDBPath(), cipher, logger)
+	if err != nil {
+		logger.Fatalf("control db: %v", err)
+	}
+	defer ctrl.Close()
+
+	// Runtime config: seed from server.json on first boot (migration), then the
+	// control DB is the source of truth.
+	rt, seeded, err := ctrl.GetConfig()
+	if err != nil {
+		logger.Fatalf("config: %v", err)
+	}
+	if !seeded {
+		if err := ctrl.SaveConfig(cfg.ToRuntime()); err != nil {
+			logger.Printf("config: could not seed from server.json (%v) — starting empty; configure in Admin ▸ Settings", err)
+		} else {
+			logger.Printf("config: seeded control db from server.json")
+		}
+		rt, _, _ = ctrl.GetConfig()
+	}
+
+	// Part 1: web server stores (always up).
+	st := store.New(rt.RetentionCap)
+	ls := logstore.New(rt.LogRetentionLines)
 	inv := k8s.NewInventory()
 
-	// SQLite persistence (optional): ensure schema, hydrate the hot stores
-	// from disk so the dashboard serves data immediately, then persist all
-	// polled data in the background while collectors refresh it.
+	// Optional SQLite persistence of metrics/logs (needs data_dir).
 	var sdb *db.DB
 	var persistDone <-chan struct{}
 	if cfg.DataDir != "" {
-		var err error
-		sdb, err = db.Open(cfg.DataDir, logger)
-		if err != nil {
+		if sdb, err = db.Open(cfg.DataDir, logger); err != nil {
 			logger.Printf("db: disabled: %v", err)
+			sdb = nil
 		} else {
-			if cfg.DBRetentionHours > 0 {
-				sdb.RetentionHours = cfg.DBRetentionHours
-			}
-			sdb.LogLinesPerSource = cfg.LogRetentionLines
 			sdb.Hydrate(st, ls, inv)
 			persistDone = sdb.StartPersist(ctx, st, ls, inv)
 		}
 	}
 
-	// CloudWatch collector — degrades gracefully without credentials.
-	var hist server.Historian
-	var awsCol *awsmetrics.Collector
-	if cfg.AWS.Enabled {
-		col, err := awsmetrics.New(ctx, cfg.AWS, st, logger)
-		if err != nil {
-			logger.Printf("aws: collector disabled: %v", err)
-		} else {
-			go col.Run(ctx)
-			hist = col
-			awsCol = col
-			logger.Printf("aws: collector started (region=%q profile=%q poll=%s)",
-				cfg.AWS.Region, cfg.AWS.Profile, cfg.AWS.PollInterval())
-		}
-	}
+	// Part 2: supervised data-collection service.
+	sup := collector.New(ctx, st, ls, inv, logger)
+	defer sup.Close()
 
-	// Native pollers: Valkey / OpenSearch / RabbitMQ over their own APIs.
-	go native.Run(ctx, cfg.Native, st, logger)
-
-	// Kubernetes collectors + log streaming clients, one per cluster.
-	var clusters []server.Cluster
-	if cfg.Kubernetes.Enabled {
-		for _, cc := range resolveClusters(ctx, cfg.Kubernetes, logger) {
-			kc, err := k8s.NewClient(cc)
-			if err != nil {
-				logger.Printf("k8s(%s): client disabled: %v", cc.Name, err)
-				continue
+	var tokMu sync.RWMutex
+	var ingestTok string
+	apply := func(r config.Runtime) {
+		if sdb != nil {
+			if r.DBRetentionHours > 0 {
+				sdb.RetentionHours = r.DBRetentionHours
 			}
-			clusters = append(clusters, server.Cluster{Name: cc.Name, Client: kc})
-			go k8s.NewCollector(cfg.Kubernetes, cc.Name, kc, st, inv, logger).Run(ctx)
-			logger.Printf("k8s(%s): collector started (poll=%s)", cc.Name, cfg.Kubernetes.PollInterval())
+			if r.LogRetentionLines > 0 {
+				sdb.LogLinesPerSource = r.LogRetentionLines
+			}
 		}
-	}
-
-	if cfg.IngestToken == "" {
-		logger.Printf("WARNING: ingest_token is empty — /api/ingest is unauthenticated")
-	}
-
-	// Authentication (optional, enabled by default): a separate SQLite
-	// user/session db seeded with admin/admin (must-change) on first setup.
-	// Fail closed — if auth is enabled but can't start, don't silently serve
-	// an unauthenticated dashboard.
-	var authn server.Authenticator
-	if cfg.Auth.On() {
-		as, err := auth.Open(cfg.AuthDBPath(), logger)
-		if err != nil {
-			logger.Fatalf("auth: %v", err)
+		tokMu.Lock()
+		ingestTok = r.IngestToken
+		tokMu.Unlock()
+		if r.IngestToken == "" {
+			logger.Printf("note: ingest_token is empty — /api/ingest is unauthenticated")
 		}
-		defer as.Close()
-		authn = as
-	} else {
+		sup.Apply(r)
+	}
+	go apply(rt) // initial — async so the web server (Part 1) serves immediately
+
+	authEnabled := cfg.Auth.On()
+	if !authEnabled {
 		logger.Printf("auth: disabled — dashboard served without a login (set auth.enabled=true to require login)")
 	}
 
-	statusFn := func() map[string]any {
-		out := map[string]any{}
-		if awsCol != nil {
-			a := awsCol.Status()
-			a["namespaces"] = awsmetrics.EffectiveNamespaces(cfg.AWS)
-			out["aws"] = a
+	// saveConfig persists (encrypting secrets), reloads (decrypts / normalizes),
+	// then hot-applies to the collector service.
+	saveConfig := func(r config.Runtime) error {
+		if err := ctrl.SaveConfig(r); err != nil {
+			return err
 		}
-		native := []string{}
-		if len(cfg.Native.Valkey) > 0 {
-			native = append(native, "Valkey")
+		nr, _, err := ctrl.GetConfig()
+		if err != nil {
+			return err
 		}
-		if len(cfg.Native.OpenSearch) > 0 {
-			native = append(native, "OpenSearch")
-		}
-		if len(cfg.Native.RabbitMQ) > 0 {
-			native = append(native, "MQ")
-		}
-		out["native"] = native
-		return out
+		apply(nr)
+		return nil
 	}
+
 	srv := &http.Server{
-		Addr:    cfg.Listen,
-		Handler: server.New(st, ls, inv, clusters, hist, statusFn, cfg.IngestToken, authn, web.FS, logger),
+		Addr: cfg.Listen,
+		Handler: server.New(server.Deps{
+			Store: st, Logs: ls, Inv: inv,
+			Clusters: func() []server.Cluster {
+				cs := sup.Clusters()
+				out := make([]server.Cluster, len(cs))
+				for i, c := range cs {
+					out[i] = server.Cluster{Name: c.Name, Client: c.Client}
+				}
+				return out
+			},
+			Hist: func() server.Historian {
+				if c := sup.AWSCollector(); c != nil {
+					return c
+				}
+				return nil
+			},
+			Status:      sup.Status,
+			IngestToken: func() string { tokMu.RLock(); defer tokMu.RUnlock(); return ingestTok },
+			Authn:       ctrl,
+			AuthEnabled: authEnabled,
+			GetConfig:   func() (config.Runtime, error) { r, _, e := ctrl.GetConfig(); return r, e },
+			SaveConfig:  saveConfig,
+			HasSecretKey: ctrl.HasSecretKey,
+			Assets:      web.FS,
+			Logger:      logger,
+		}),
 	}
 	go func() {
 		<-ctx.Done()
@@ -175,51 +194,13 @@ func runServer(ctx context.Context, cfg config.Config, logger *log.Logger) {
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		logger.Fatal(err)
 	}
+	sup.Close()
 	if sdb != nil {
-		select { // wait for the persister's final flush
+		select {
 		case <-persistDone:
 		case <-time.After(3 * time.Second):
 		}
 		sdb.Close()
 	}
 	fmt.Fprintln(os.Stderr, "bye")
-}
-
-// resolveClusters turns config into concrete cluster endpoints:
-// kubeconfig contexts (awsobs runs kubectl proxy for each), plus any
-// directly configured clusters, falling back to legacy single-cluster
-// config when neither is set.
-func resolveClusters(ctx context.Context, kcfg config.K8sConfig, logger *log.Logger) []config.ClusterConfig {
-	var out []config.ClusterConfig
-	seen := map[string]bool{}
-	add := func(cc config.ClusterConfig) {
-		if !seen[cc.Name] {
-			seen[cc.Name] = true
-			out = append(out, cc)
-		}
-	}
-
-	if len(kcfg.Contexts) > 0 {
-		names, err := k8s.ExpandContexts(ctx, kcfg.Contexts)
-		if err != nil {
-			logger.Printf("k8s: context discovery failed: %v", err)
-		}
-		for _, cn := range names {
-			url, err := k8s.StartProxy(ctx, cn, logger)
-			if err != nil {
-				logger.Printf("k8s: %v", err)
-				continue
-			}
-			name := k8s.ContextDisplayName(cn)
-			logger.Printf("k8s(%s): kubectl proxy started at %s (context %s)", name, url, cn)
-			add(config.ClusterConfig{Name: name, APIURL: url})
-		}
-	}
-	for _, cc := range kcfg.Clusters {
-		add(cc)
-	}
-	if len(out) == 0 {
-		out = kcfg.ClusterList() // legacy: in-cluster or proxy on :8001
-	}
-	return out
 }

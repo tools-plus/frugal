@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"golang.org/x/crypto/bcrypt"
+
+	"github.com/example/awsobs/internal/secret"
 )
 
 const schema = `
@@ -42,6 +44,10 @@ CREATE TABLE IF NOT EXISTS roles (
 	is_admin INTEGER NOT NULL DEFAULT 0,      -- admin roles manage users/roles and see everything
 	services TEXT    NOT NULL DEFAULT '[]'    -- JSON array of allowed service keys; ["*"] = all
 );
+CREATE TABLE IF NOT EXISTS config (
+	id  INTEGER PRIMARY KEY CHECK (id = 1),   -- single row
+	doc TEXT NOT NULL                         -- JSON config.Runtime; secret fields encrypted
+);
 `
 
 // allServices is the sentinel in a role's service list meaning "every service".
@@ -60,12 +66,15 @@ var dummyHash, _ = bcrypt.GenerateFromPassword([]byte("timing-equalizer"), bcryp
 
 type Store struct {
 	sql    *sql.DB
+	cipher *secret.Cipher
 	logger *log.Logger
 }
 
-// Open creates/opens the auth database at path and ensures the schema and the
-// default admin user exist.
-func Open(path string, logger *log.Logger) (*Store, error) {
+// Open creates/opens the control database at path (users, roles, sessions, and
+// encrypted runtime config) and ensures the schema and default admin exist.
+// cipher encrypts credential fields at rest; pass secret.New("") when no key is
+// configured (secrets then can't be stored, but the rest still works).
+func Open(path string, cipher *secret.Cipher, logger *log.Logger) (*Store, error) {
 	if !driverAvailable {
 		return nil, fmt.Errorf("sqlite driver not compiled in (build the server with CGO_ENABLED=1)")
 	}
@@ -83,7 +92,7 @@ func Open(path string, logger *log.Logger) (*Store, error) {
 		sq.Close()
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
-	s := &Store{sql: sq, logger: logger}
+	s := &Store{sql: sq, cipher: cipher, logger: logger}
 	if err := s.migrate(); err != nil {
 		sq.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
