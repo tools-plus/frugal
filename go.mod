@@ -10,6 +10,8 @@ require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.17.67
 	github.com/aws/aws-sdk-go-v2/service/cloudwatch v1.45.1
 	github.com/aws/aws-sdk-go-v2/service/elasticache v1.55.0
+	github.com/aws/aws-sdk-go-v2/service/mq v1.37.0
+	github.com/aws/aws-sdk-go-v2/service/opensearch v1.74.0
 	github.com/mattn/go-sqlite3 v1.14.22
 	golang.org/x/crypto v0.31.0
 )

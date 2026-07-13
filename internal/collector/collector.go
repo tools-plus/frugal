@@ -91,8 +91,20 @@ func (s *Supervisor) Apply(rt config.Runtime) {
 		if disc, err := awsdiscovery.Valkey(ctx, awsCfg); err != nil {
 			s.logger.Printf("discovery: elasticache: %v", err)
 		} else if len(disc) > 0 {
-			nat.Valkey = mergeValkey(nat.Valkey, disc)
+			nat.Valkey = mergeTargets(nat.Valkey, disc, func(t config.ValkeyTarget) (string, string) { return t.Name, t.Addr })
 			s.logger.Printf("discovery: elasticache found %d node(s)", len(disc))
+		}
+		if disc, err := awsdiscovery.OpenSearch(ctx, awsCfg); err != nil {
+			s.logger.Printf("discovery: opensearch: %v", err)
+		} else if len(disc) > 0 {
+			nat.OpenSearch = mergeTargets(nat.OpenSearch, disc, func(t config.OpenSearchTarget) (string, string) { return t.Name, t.URL })
+			s.logger.Printf("discovery: opensearch found %d domain(s)", len(disc))
+		}
+		if disc, err := awsdiscovery.RabbitMQ(ctx, awsCfg); err != nil {
+			s.logger.Printf("discovery: amazonmq: %v", err)
+		} else if len(disc) > 0 {
+			nat.RabbitMQ = mergeTargets(nat.RabbitMQ, disc, func(t config.RabbitTarget) (string, string) { return t.Name, t.URL })
+			s.logger.Printf("discovery: amazonmq found %d broker(s)", len(disc))
 		}
 	}
 	if n := len(nat.Valkey) + len(nat.OpenSearch) + len(nat.RabbitMQ); n > 0 {
@@ -125,20 +137,22 @@ func (s *Supervisor) Apply(rt config.Runtime) {
 	}
 }
 
-// mergeValkey combines manually-configured Valkey targets with discovered ones.
-// Manual entries win (so an operator can supply an AUTH token / TLS override for
-// a discovered cluster by adding a same-named entry); discovered targets that
-// don't collide by name or address are appended.
-func mergeValkey(manual, discovered []config.ValkeyTarget) []config.ValkeyTarget {
+// mergeTargets combines manually-configured native targets with discovered
+// ones. Manual entries win (so an operator can supply credentials / overrides
+// for a discovered resource via a same-named entry); discovered targets that
+// don't collide by name or endpoint are appended. key extracts (name, endpoint).
+func mergeTargets[T any](manual, discovered []T, key func(T) (string, string)) []T {
 	names := map[string]bool{}
 	addrs := map[string]bool{}
-	out := append([]config.ValkeyTarget(nil), manual...)
+	out := append([]T(nil), manual...)
 	for _, t := range manual {
-		names[t.Name] = true
-		addrs[t.Addr] = true
+		n, a := key(t)
+		names[n] = true
+		addrs[a] = true
 	}
 	for _, d := range discovered {
-		if names[d.Name] || addrs[d.Addr] {
+		n, a := key(d)
+		if names[n] || addrs[a] {
 			continue
 		}
 		out = append(out, d)

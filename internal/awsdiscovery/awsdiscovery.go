@@ -13,6 +13,8 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/elasticache"
+	"github.com/aws/aws-sdk-go-v2/service/mq"
+	"github.com/aws/aws-sdk-go-v2/service/opensearch"
 
 	"github.com/example/awsobs/internal/config"
 )
@@ -52,6 +54,79 @@ func Valkey(ctx context.Context, ac aws.Config) ([]config.ValkeyTarget, error) {
 					TLS:  tls,
 				})
 			}
+		}
+	}
+	return out, nil
+}
+
+// OpenSearch discovers OpenSearch/Elasticsearch domain endpoints. Most domains
+// use fine-grained access control, so username/password comes from config
+// (matched by name); discovery supplies the URL.
+func OpenSearch(ctx context.Context, ac aws.Config) ([]config.OpenSearchTarget, error) {
+	os := opensearch.NewFromConfig(ac)
+	names, err := os.ListDomainNames(ctx, &opensearch.ListDomainNamesInput{})
+	if err != nil {
+		return nil, fmt.Errorf("ListDomainNames: %w", err)
+	}
+	var domainNames []string
+	for _, d := range names.DomainNames {
+		domainNames = append(domainNames, aws.ToString(d.DomainName))
+	}
+	if len(domainNames) == 0 {
+		return nil, nil
+	}
+	desc, err := os.DescribeDomains(ctx, &opensearch.DescribeDomainsInput{DomainNames: domainNames})
+	if err != nil {
+		return nil, fmt.Errorf("DescribeDomains: %w", err)
+	}
+	var out []config.OpenSearchTarget
+	for _, d := range desc.DomainStatusList {
+		host := aws.ToString(d.Endpoint) // public endpoint
+		if host == "" {
+			host = d.Endpoints["vpc"] // VPC domains expose the vpc endpoint
+		}
+		if host == "" {
+			continue
+		}
+		out = append(out, config.OpenSearchTarget{
+			Name: aws.ToString(d.DomainName),
+			URL:  "https://" + host,
+		})
+	}
+	return out, nil
+}
+
+// RabbitMQ discovers AmazonMQ RabbitMQ broker management endpoints (ActiveMQ is
+// skipped — it doesn't expose the RabbitMQ management HTTP API). Broker admin
+// credentials come from config (matched by name).
+func RabbitMQ(ctx context.Context, ac aws.Config) ([]config.RabbitTarget, error) {
+	c := mq.NewFromConfig(ac)
+	var out []config.RabbitTarget
+	p := mq.NewListBrokersPaginator(c, &mq.ListBrokersInput{})
+	for p.HasMorePages() {
+		page, err := p.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("ListBrokers: %w", err)
+		}
+		for _, b := range page.BrokerSummaries {
+			if string(b.EngineType) != "RABBITMQ" {
+				continue
+			}
+			d, err := c.DescribeBroker(ctx, &mq.DescribeBrokerInput{BrokerId: b.BrokerId})
+			if err != nil {
+				return nil, fmt.Errorf("DescribeBroker: %w", err)
+			}
+			url := ""
+			if len(d.BrokerInstances) > 0 {
+				url = aws.ToString(d.BrokerInstances[0].ConsoleURL) // RabbitMQ mgmt API + console share this host
+			}
+			if url == "" {
+				continue
+			}
+			out = append(out, config.RabbitTarget{
+				Name: aws.ToString(d.BrokerName),
+				URL:  url,
+			})
 		}
 	}
 	return out, nil
