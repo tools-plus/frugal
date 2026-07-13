@@ -224,7 +224,12 @@ func (c *Collector) setErr(err error) {
 	c.stMu.Unlock()
 }
 
-func New(ctx context.Context, cfg config.AWSConfig, st *store.Store, logger *log.Logger) (*Collector, error) {
+// LoadConfig builds an aws.Config from our AWSConfig: UI-provided static keys
+// take precedence, otherwise the default credential chain (env / shared config
+// / SSO / EC2/EKS role/IRSA) is used. It verifies credentials actually resolve,
+// so callers can treat an error as "no credentials available." Shared by the
+// CloudWatch collector and the resource-discovery layer.
+func LoadConfig(ctx context.Context, cfg config.AWSConfig) (aws.Config, error) {
 	opts := []func(*awscfg.LoadOptions) error{}
 	if cfg.Region != "" {
 		opts = append(opts, awscfg.WithRegion(cfg.Region))
@@ -232,28 +237,38 @@ func New(ctx context.Context, cfg config.AWSConfig, st *store.Store, logger *log
 	if cfg.Profile != "" {
 		opts = append(opts, awscfg.WithSharedConfigProfile(cfg.Profile))
 	}
-	// UI-provided static keys take precedence; otherwise fall back to the
-	// default credential chain (env / shared config / SSO / EC2/EKS role/IRSA).
 	if cfg.AccessKeyID != "" && cfg.SecretAccessKey != "" {
 		opts = append(opts, awscfg.WithCredentialsProvider(
 			credentials.NewStaticCredentialsProvider(cfg.AccessKeyID, cfg.SecretAccessKey, cfg.SessionToken)))
 	}
 	ac, err := awscfg.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
-		return nil, fmt.Errorf("aws config: %w", err)
+		return aws.Config{}, fmt.Errorf("aws config: %w", err)
 	}
-	// Confirm credentials actually resolve, so the collector only starts "when
-	// credentials are available" — otherwise report clearly and stay down.
 	if _, err := ac.Credentials.Retrieve(ctx); err != nil {
-		return nil, fmt.Errorf("no aws credentials available: %w", err)
+		return aws.Config{}, fmt.Errorf("no aws credentials available: %w", err)
 	}
+	return ac, nil
+}
+
+func New(ctx context.Context, cfg config.AWSConfig, st *store.Store, logger *log.Logger) (*Collector, error) {
+	ac, err := LoadConfig(ctx, cfg)
+	if err != nil {
+		return nil, err
+	}
+	return NewWithConfig(ac, cfg, st, logger), nil
+}
+
+// NewWithConfig builds a collector from an already-loaded aws.Config (so the
+// supervisor can share one config between the collector and discovery).
+func NewWithConfig(ac aws.Config, cfg config.AWSConfig, st *store.Store, logger *log.Logger) *Collector {
 	return &Collector{
 		cfg:    cfg,
 		cw:     cloudwatch.NewFromConfig(ac),
 		store:  st,
 		logger: logger,
 		reg:    map[string]target{},
-	}, nil
+	}
 }
 
 func (c *Collector) Run(ctx context.Context) {

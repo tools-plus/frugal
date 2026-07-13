@@ -12,6 +12,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+
+	"github.com/example/awsobs/internal/awsdiscovery"
 	"github.com/example/awsobs/internal/awsmetrics"
 	"github.com/example/awsobs/internal/config"
 	"github.com/example/awsobs/internal/k8s"
@@ -65,29 +68,44 @@ func (s *Supervisor) Apply(rt config.Runtime) {
 
 	run := func(f func()) { s.wg.Add(1); go func() { defer s.wg.Done(); f() }() }
 
-	// AWS — only when enabled and credentials resolve.
+	// AWS — only when enabled and credentials resolve. The resolved config is
+	// reused for resource discovery below.
+	var awsCfg aws.Config
+	var awsOK bool
 	if rt.AWS.Enabled {
-		if col, err := awsmetrics.New(ctx, rt.AWS, s.st, s.logger); err != nil {
+		if ac, err := awsmetrics.LoadConfig(ctx, rt.AWS); err != nil {
 			s.logger.Printf("aws: collector not started: %v", err)
 		} else {
+			awsCfg, awsOK = ac, true
+			col := awsmetrics.NewWithConfig(ac, rt.AWS, s.st, s.logger)
 			s.aws = col
 			run(func() { col.Run(ctx) })
 			s.logger.Printf("aws: collector started (region=%q poll=%s)", rt.AWS.Region, rt.AWS.PollInterval())
 		}
 	}
 
-	// Native pollers — only when targets are configured.
-	if n := len(rt.Native.Valkey) + len(rt.Native.OpenSearch) + len(rt.Native.RabbitMQ); n > 0 {
-		if len(rt.Native.Valkey) > 0 {
+	// Native pollers: start from the configured targets, augmented by resources
+	// auto-discovered from the AWS APIs (free direct polling — no manual URLs).
+	nat := rt.Native
+	if awsOK {
+		if disc, err := awsdiscovery.Valkey(ctx, awsCfg); err != nil {
+			s.logger.Printf("discovery: elasticache: %v", err)
+		} else if len(disc) > 0 {
+			nat.Valkey = mergeValkey(nat.Valkey, disc)
+			s.logger.Printf("discovery: elasticache found %d node(s)", len(disc))
+		}
+	}
+	if n := len(nat.Valkey) + len(nat.OpenSearch) + len(nat.RabbitMQ); n > 0 {
+		if len(nat.Valkey) > 0 {
 			s.nativeSvcs = append(s.nativeSvcs, "Valkey")
 		}
-		if len(rt.Native.OpenSearch) > 0 {
+		if len(nat.OpenSearch) > 0 {
 			s.nativeSvcs = append(s.nativeSvcs, "OpenSearch")
 		}
-		if len(rt.Native.RabbitMQ) > 0 {
+		if len(nat.RabbitMQ) > 0 {
 			s.nativeSvcs = append(s.nativeSvcs, "MQ")
 		}
-		run(func() { native.Run(ctx, rt.Native, s.st, s.logger) })
+		run(func() { native.Run(ctx, nat, s.st, s.logger) })
 		s.logger.Printf("native: %d target(s) started", n)
 	}
 
@@ -105,6 +123,27 @@ func (s *Supervisor) Apply(rt config.Runtime) {
 			s.logger.Printf("k8s(%s): collector started (poll=%s)", cc.Name, rt.Kubernetes.PollInterval())
 		}
 	}
+}
+
+// mergeValkey combines manually-configured Valkey targets with discovered ones.
+// Manual entries win (so an operator can supply an AUTH token / TLS override for
+// a discovered cluster by adding a same-named entry); discovered targets that
+// don't collide by name or address are appended.
+func mergeValkey(manual, discovered []config.ValkeyTarget) []config.ValkeyTarget {
+	names := map[string]bool{}
+	addrs := map[string]bool{}
+	out := append([]config.ValkeyTarget(nil), manual...)
+	for _, t := range manual {
+		names[t.Name] = true
+		addrs[t.Addr] = true
+	}
+	for _, d := range discovered {
+		if names[d.Name] || addrs[d.Addr] {
+			continue
+		}
+		out = append(out, d)
+	}
+	return out
 }
 
 // teardownLocked cancels the current generation and waits (bounded) for it to
