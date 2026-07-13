@@ -148,7 +148,7 @@ to the server, using the **ingest token** you set in Settings.
 
 ## Developer view
 
-Prerequisites: **Go ≥ 1.22**, and for EKS work `kubectl` access plus
+Prerequisites: **Go ≥ 1.24** (required by the AWS SDK service clients), and for EKS work `kubectl` access plus
 metrics-server in the cluster.
 
 ```bash
@@ -294,7 +294,8 @@ via `/api/history`.
 
 ## Notes
 
-- go.mod targets Go 1.22; `x/crypto` is pinned to a 1.22-compatible version.
+- go.mod targets Go 1.24 (the AWS SDK service clients used for discovery
+  require it); the Dockerfile builds on `golang:1.24`.
 - OpenSearch metrics live under the legacy `AWS/ES` namespace.
 - ALB/NLB metrics are per-load-balancer and per-target-group; both dimension
   sets are discovered automatically.

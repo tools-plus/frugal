@@ -2,8 +2,6 @@ module github.com/example/awsobs
 
 go 1.24
 
-toolchain go1.24.11
-
 require (
 	github.com/aws/aws-sdk-go-v2 v1.42.1
 	github.com/aws/aws-sdk-go-v2/config v1.29.14
