@@ -10,7 +10,7 @@ export const S = {
   resource: null,   // flat services
   sel: null,        // EKS: {t:"cp"|"nodes"|"kind", cluster, kind, ns, wl, pod, node, view}
   exp: new Set(),
-  range: 3600, mfilter: "", rsearch: "", events: 0,
+  range: 3600, mfilter: "", rsearch: "",
   status: null,
 };
 
