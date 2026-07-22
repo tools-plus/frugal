@@ -1,4 +1,13 @@
-# frugal
+<div align="center">
+  <img src="docs/frugal-logo.png" alt="Frugal" width="320">
+  <p><strong>Cheap, single-binary AWS + EKS observability — native-first, no Prometheus, no external database.</strong></p>
+  <p>
+    <a href="LICENSE"><img alt="License: AGPL-3.0" src="https://img.shields.io/badge/license-AGPL--3.0-3fbfb4.svg"></a>
+    <a href="https://github.com/tools-plus/frugal/releases"><img alt="Latest release" src="https://img.shields.io/github/v/release/tools-plus/frugal?color=3fbfb4"></a>
+    <a href="https://github.com/tools-plus/frugal/pkgs/container/frugal"><img alt="GHCR image" src="https://img.shields.io/badge/ghcr.io-tools--plus%2Ffrugal-3fbfb4?logo=docker&logoColor=white"></a>
+    <a href="go.mod"><img alt="Go version" src="https://img.shields.io/github/go-mod/go-version/tools-plus/frugal?color=3fbfb4"></a>
+  </p>
+</div>
 
 A single-binary AWS + EKS observability tool with two modes:
 
