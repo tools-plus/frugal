@@ -223,7 +223,9 @@ func (c *Collector) Status() map[string]any {
 	c.mu.RLock()
 	n := len(c.targets)
 	var regular, daily int
+	byNS := map[string]int{}
 	for _, t := range c.targets {
+		byNS[t.Namespace]++
 		if dailyNamespaces[t.Namespace] {
 			daily++
 		} else {
@@ -237,6 +239,7 @@ func (c *Collector) Status() map[string]any {
 		"targets":            n,
 		"cw_targets_regular": regular,
 		"cw_targets_daily":   daily,
+		"cw_by_namespace":    byNS, // per-namespace target counts, for the live UI estimate
 		"est_monthly_usd":    c.estMonthlyUSD(regular, daily),
 		"last_error":         c.lastErr,
 		"last_poll":          c.lastPoll,

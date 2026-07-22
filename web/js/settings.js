@@ -30,9 +30,12 @@ const MODES = {
 const USD_PER_READ = 0.01 / 1000;
 const SEC_PER_MONTH = 30 * 24 * 3600;
 const DAILY_POLL_SEC = 3600; // daily-resolution targets are fetched hourly
+const DAILY_NS = new Set(["AWS/S3"]); // namespaces billed at the hourly cadence
+// Namespaces a native poller can supersede (matched to backend supersededNamespaces).
+const SUPERSEDABLE = new Set(["AWS/ElastiCache", "AWS/ES", "AWS/AmazonMQ"]);
 
-// Billable CloudWatch target counts from /api/status, for the live estimate.
-let cwRegular = 0, cwDaily = 0, cwCountKnown = false;
+// Per-namespace billable target counts from /api/status, for the live estimate.
+let cwByNS = {}, cwCountKnown = false;
 
 function h(html) { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstChild; }
 function val(id) { return (root.querySelector("#" + id) || {}).value ?? ""; }
@@ -69,12 +72,12 @@ export async function openSettings() {
   try { data = await fetch("/api/settings").then(r => r.json()); } catch { err("could not load settings"); return; }
   // Pull current billable target counts so the cost estimate reflects reality.
   cwCountKnown = false;
+  cwByNS = {};
   try {
     const st = await fetch("/api/status").then(r => r.json());
     const a = (st && st.aws) || {};
-    if (a.cw_targets_regular != null) {
-      cwRegular = a.cw_targets_regular | 0;
-      cwDaily = a.cw_targets_daily | 0;
+    if (a.cw_by_namespace) {
+      cwByNS = a.cw_by_namespace;
       cwCountKnown = true;
     }
   } catch { /* estimate falls back to a note */ }
@@ -149,6 +152,10 @@ function render(data) {
     const el = awsSec.querySelector("#" + id);
     if (el) el.addEventListener("input", () => { markMode(); updateCost(); });
   });
+  // Service selection and the supersede toggle also move the estimate.
+  nsGrid.addEventListener("change", updateCost);
+  const supersedeCb = awsSec.querySelector("#awsSupersede");
+  if (supersedeCb) supersedeCb.addEventListener("change", updateCost);
   markMode();
   updateCost();
 
@@ -217,7 +224,10 @@ function markMode() {
 }
 
 // Recompute the estimated monthly CloudWatch cost from the current poll
-// interval and the billable target counts reported by /api/status.
+// interval, the *selected* services, and the supersede toggle — using the
+// per-namespace target counts reported by /api/status. Reacts live to every
+// relevant control. Only namespaces the collector has already discovered
+// contribute; newly-enabled services show up after saving + discovery.
 function updateCost() {
   const el = root.querySelector("#awsCost");
   if (!el) return;
@@ -226,9 +236,16 @@ function updateCost() {
     return;
   }
   const poll = Math.max(num("awsPoll") || 300, 1);
-  const reads = cwRegular * SEC_PER_MONTH / poll + cwDaily * SEC_PER_MONTH / DAILY_POLL_SEC;
+  const selected = new Set([...root.querySelectorAll("#awsNsGrid input:checked")].map(c => c.value));
+  const supersede = checked("awsSupersede");
+  let reads = 0, n = 0;
+  for (const [ns, cnt] of Object.entries(cwByNS)) {
+    if (!selected.has(ns)) continue;            // service unchecked → not collected
+    if (supersede && SUPERSEDABLE.has(ns)) continue; // native covers it → not billed
+    n += cnt;
+    reads += cnt * SEC_PER_MONTH / (DAILY_NS.has(ns) ? DAILY_POLL_SEC : poll);
+  }
   const usd = reads * USD_PER_READ;
-  const n = cwRegular + cwDaily;
   el.innerHTML = `≈ <b>$${usd.toFixed(2)}/mo</b> CloudWatch <span class="smuted">(${n} billable metric${n === 1 ? "" : "s"} at this interval)</span>`;
 }
 
