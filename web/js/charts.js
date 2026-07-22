@@ -5,7 +5,7 @@
 
 import { S, MEMBER_CAP, PALETTE, svcOf, loadingOr, saveNav } from "./state.js";
 import { metricFmt } from "./format.js";
-import { ensureRing, ensureHistory, lastVal, windowed } from "./data.js";
+import { ensureRing, ensureHistory, lastVal, windowed, fetchWindow } from "./data.js";
 import { buildPills, buildCtxFilters } from "./nav.js";
 import { renderLogsInline, openAgentLogs } from "./logs.js";
 import { openZoom } from "./zoom.js";
@@ -159,23 +159,59 @@ function drawChart(chart) {
   chart.pending = false;
   const opts = {
     width: el.clientWidth || 400, height: 150,
-    cursor: {points: {show: false}},
+    cursor: {points: {show: false}, drag: {x: true, y: false, setScale: false}},
     padding: [8, 8, 0, 0],
-    scales: { x: { range: () => { const n = Date.now()/1000; return [n - S.range, n]; } } },
+    scales: { x: { range: () => xRange(chart) } },
     series: [ {}, ...chart.members.map(m => ({label: m.variant, stroke: m.color, width: 1.5, spanGaps: true,
                 fill: chart.members.length === 1 ? m.color + "14" : undefined})) ],
     axes: [
-      {...axisStyle, values: (u, vals) => vals.map(t => {
-        const d = new Date(t*1000);
-        return S.range > 86400 ? (d.getMonth()+1)+"/"+d.getDate()+" "+String(d.getHours()).padStart(2,"0")+"h"
-                               : d.toLocaleTimeString([], {hour:"2-digit", minute:"2-digit"});
-      })},
+      {...axisStyle, values: (u, vals) => xTickFmt(chart, vals)},
       {...axisStyle, size: 64, values: (u, vals) => vals.map(chart.fmt)},
     ],
+    hooks: { setSelect: [u => onDragZoom(chart, u)] },
   };
   chart.u = new uPlot(opts, data, el);
+  el.addEventListener("dblclick", () => resetZoom(chart));
   new ResizeObserver(() => chart.u && chart.u.setSize({width: el.clientWidth, height: 150})).observe(el);
   updateVal(chart, data);
+}
+
+// ---- drag-to-zoom (per chart): select a segment to zoom, double-click to reset ----
+
+// xRange returns the chart's current x-window: the user's zoom if set, else the
+// live [now-range, now] window that auto-follows.
+function xRange(chart) {
+  if (chart.zoom) return [chart.zoom.min, chart.zoom.max];
+  const n = Date.now() / 1000;
+  return [n - S.range, n];
+}
+function xTickFmt(chart, vals) {
+  const span = chart.zoom ? (chart.zoom.max - chart.zoom.min) : S.range;
+  return vals.map(t => {
+    const d = new Date(t * 1000);
+    return span > 86400 ? (d.getMonth()+1)+"/"+d.getDate()+" "+String(d.getHours()).padStart(2,"0")+"h"
+                        : d.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+  });
+}
+function onDragZoom(chart, u) {
+  const sel = u.select;
+  u.setSelect({left: 0, top: 0, width: 0, height: 0}, false); // clear the gray box
+  if (sel.width <= 8) return;                                  // ignore clicks / tiny drags
+  const min = u.posToVal(sel.left, "x");
+  const max = u.posToVal(sel.left + sel.width, "x");
+  if (max - min < 1) return;
+  chart.zoom = {min, max};
+  u.setScale("x", {min, max});
+  // re-fetch that slice at finer resolution, then redraw with the new points
+  Promise.all(chart.members.map(m => fetchWindow(m.id, min, max))).then(() => {
+    if (chart.u && chart.zoom) drawChart(chart);
+  });
+}
+function resetZoom(chart) {
+  if (!chart.zoom || !chart.u) return;
+  chart.zoom = null;
+  const n = Date.now() / 1000;
+  chart.u.setScale("x", {min: n - S.range, max: n});
 }
 function updateVal(chart, data) {
   let last = null;

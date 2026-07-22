@@ -25,6 +25,25 @@ export async function ensureHistory(id, range) {
   for (const p of pts) m.set(p.t, p.v);
   S.data.set(id, m);
 }
+// fetchWindow re-fetches a specific [from,to] window at its natural (finer)
+// resolution and merges it in — used when the user drag-zooms into a slice.
+// CloudWatch series come back finer from the CloudWatch API; other sources come
+// from SQLite at the span's downsample step. Cached per id so repeated zooms
+// into an already-covered window don't refetch.
+const fetchedWindows = new Map(); // id -> [[from,to], ...] already fetched
+export async function fetchWindow(id, from, to) {
+  from = Math.floor(from); to = Math.ceil(to);
+  if (to <= from) return;
+  const seen = fetchedWindows.get(id) || [];
+  if (seen.some(([f, t]) => f <= from && t >= to)) return; // already covered
+  seen.push([from, to]);
+  fetchedWindows.set(id, seen);
+  const pts = await fetch(`/api/history?id=${encodeURIComponent(id)}&from=${from}&to=${to}`)
+    .then(r => r.ok ? r.json() : []).catch(() => []);
+  const m = S.data.get(id) || new Map();
+  for (const p of pts) m.set(p.t, p.v);
+  S.data.set(id, m);
+}
 export function lastVal(id) {
   const m = S.data.get(id);
   if (m && m.size) { let mt = -1, mv = null; for (const [t,v] of m) if (t > mt) { mt = t; mv = v; } return mv; }
