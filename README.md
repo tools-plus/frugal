@@ -392,6 +392,17 @@ nodes / workloads (from pod ownerReferences) → pods, pod/node CPU+memory from
 `metrics.k8s.io`, inventory from the core API, and live log tails via
 `pods/{pod}/log?follow=true` streamed to the browser over SSE.
 
+Clusters are found from three sources (deduplicated by name): **EKS
+auto-discovery** (on by default — `eks:ListClusters` + `DescribeCluster`, then a
+token minted per cluster, so node/pod metrics work straight from AWS creds with
+**no kubeconfig**), an **uploaded kubeconfig** (every context becomes a cluster;
+EKS exec-auth contexts are tokened automatically), and **direct API** entries
+(`api_url` + bearer token). Note: the EKS **control-plane** charts come from
+CloudWatch's `AWS/EKS` namespace and appear from creds alone; **node/pod**
+metrics need a live connection — a reachable cluster endpoint (public, or in-VPC
+for private endpoints), the IAM principal mapped in the cluster's access
+entries, and **metrics-server** installed.
+
 **Storage** — SQLite is the system of record, memory is the hot path. With
 `data_dir` set, the server ensures `<data_dir>/frugal.db` on start, hydrates the
 in-memory stores from it so the dashboard serves data *immediately* on restart,

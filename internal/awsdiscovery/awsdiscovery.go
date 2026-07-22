@@ -11,16 +11,70 @@ package awsdiscovery
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/eks"
+	ekstypes "github.com/aws/aws-sdk-go-v2/service/eks/types"
 	"github.com/aws/aws-sdk-go-v2/service/elasticache"
 	"github.com/aws/aws-sdk-go-v2/service/mq"
 	"github.com/aws/aws-sdk-go-v2/service/opensearch"
 
 	"github.com/tools-plus/frugal/internal/config"
 )
+
+// EKSCluster is a discovered EKS cluster ready to connect to: its API endpoint,
+// decoded CA cert, and the name/region used to mint an auth token.
+type EKSCluster struct {
+	Name     string
+	Endpoint string
+	CAData   []byte
+	Region   string
+}
+
+// EKS discovers ACTIVE EKS clusters via the AWS API (eks:ListClusters +
+// DescribeCluster) so frugal can collect node/pod metrics straight from creds —
+// no kubeconfig and no kubectl. The caller mints a token per cluster (see
+// internal/ekstoken) and connects directly. Clusters whose control-plane
+// endpoint isn't reachable from the server simply fail to collect (logged);
+// discovery still lists them. Per-cluster describe failures are skipped rather
+// than aborting the whole scan.
+func EKS(ctx context.Context, ac aws.Config) ([]EKSCluster, error) {
+	c := eks.NewFromConfig(ac)
+	var names []string
+	p := eks.NewListClustersPaginator(c, &eks.ListClustersInput{})
+	for p.HasMorePages() {
+		page, err := p.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("ListClusters: %w", err)
+		}
+		names = append(names, page.Clusters...)
+	}
+	var out []EKSCluster
+	for _, name := range names {
+		d, err := c.DescribeCluster(ctx, &eks.DescribeClusterInput{Name: aws.String(name)})
+		if err != nil || d.Cluster == nil {
+			continue // skip clusters we can't describe rather than failing the scan
+		}
+		cl := d.Cluster
+		if cl.Status != ekstypes.ClusterStatusActive || aws.ToString(cl.Endpoint) == "" {
+			continue
+		}
+		var ca []byte
+		if cl.CertificateAuthority != nil {
+			ca, _ = base64.StdEncoding.DecodeString(aws.ToString(cl.CertificateAuthority.Data))
+		}
+		out = append(out, EKSCluster{
+			Name:     name,
+			Endpoint: aws.ToString(cl.Endpoint),
+			CAData:   ca,
+			Region:   ac.Region,
+		})
+	}
+	return out, nil
+}
 
 // Valkey discovers ElastiCache (Redis/Valkey) node endpoints. Passwords are
 // left blank — unsecured in-VPC clusters poll as-is; for AUTH-enabled clusters

@@ -159,15 +159,23 @@ func (s *Supervisor) Apply(rt config.Runtime) {
 		s.logger.Printf("native: %d target(s) started", n)
 	}
 
-	// Kubernetes — clusters from an uploaded kubeconfig and/or configured
-	// contexts/direct endpoints. One collector per cluster.
+	// Kubernetes — clusters from EKS auto-discovery, an uploaded kubeconfig,
+	// and/or configured contexts/direct endpoints. One collector per cluster,
+	// deduplicated by name (earlier sources win).
 	if rt.Kubernetes.Enabled {
+		seen := map[string]bool{}
 		startK8s := func(name string, cl *k8s.Client) {
+			if name == "" || seen[name] {
+				return
+			}
+			seen[name] = true
 			s.clusters = append(s.clusters, Cluster{Name: name, Client: cl})
 			col := k8s.NewCollector(rt.Kubernetes, name, cl, s.st, s.inv, s.logger)
 			run(func() { col.Run(ctx) })
 			s.logger.Printf("k8s(%s): collector started", name)
 		}
+
+		// Uploaded kubeconfig — explicit, so it takes precedence on name clashes.
 		kubeconfigSet := rt.Kubernetes.Kubeconfig != ""
 		if kubeconfigSet {
 			for _, kc := range parseKube(rt.Kubernetes.Kubeconfig, s.logger) {
@@ -177,12 +185,7 @@ func (s *Supervisor) Apply(rt config.Runtime) {
 						s.logger.Printf("k8s(%s): EKS kubeconfig needs AWS credentials — skipped", kc.Name)
 						continue
 					}
-					ac := awsCfg
-					if kc.Region != "" && kc.Region != ac.Region {
-						ac = awsCfg.Copy()
-						ac.Region = kc.Region
-					}
-					tokenFn = eksTokenFn(ctx, ac, kc.EKSClusterName, s.logger)
+					tokenFn = eksTokenFn(ctx, awsCfgForRegion(awsCfg, kc.Region), kc.EKSClusterName, s.logger)
 				}
 				cl, err := k8s.NewKubeClient(kc.Server, kc.CAData, kc.ClientCertData, kc.ClientKeyData, tokenFn)
 				if err != nil {
@@ -192,9 +195,35 @@ func (s *Supervisor) Apply(rt config.Runtime) {
 				startK8s(kc.Name, cl)
 			}
 		}
-		// Contexts / direct clusters — plus the in-cluster/proxy fallback, but
-		// only when nothing else (contexts, direct clusters, or kubeconfig) is set.
-		if len(rt.Kubernetes.Contexts) > 0 || len(rt.Kubernetes.Clusters) > 0 || !kubeconfigSet {
+
+		// EKS auto-discovery from creds — no kubeconfig needed. Lists clusters via
+		// the AWS API and mints a token per cluster.
+		if awsOK && rt.Kubernetes.DiscoverEKSOn() {
+			if clusters, err := awsdiscovery.EKS(ctx, awsCfg); err != nil {
+				s.logger.Printf("discovery: eks: %v", err)
+			} else {
+				for _, ec := range clusters {
+					if seen[ec.Name] {
+						continue
+					}
+					cl, err := k8s.NewKubeClient(ec.Endpoint, ec.CAData, nil, nil,
+						eksTokenFn(ctx, awsCfgForRegion(awsCfg, ec.Region), ec.Name, s.logger))
+					if err != nil {
+						s.logger.Printf("k8s(%s): %v", ec.Name, err)
+						continue
+					}
+					startK8s(ec.Name, cl)
+				}
+				if len(clusters) > 0 {
+					s.logger.Printf("discovery: eks found %d cluster(s)", len(clusters))
+				}
+			}
+		}
+
+		// Explicit contexts / direct clusters, plus the in-cluster/proxy fallback —
+		// the latter only when nothing else has connected a cluster.
+		explicit := len(rt.Kubernetes.Contexts) > 0 || len(rt.Kubernetes.Clusters) > 0
+		if explicit || (len(seen) == 0 && !kubeconfigSet) {
 			for _, cc := range resolveClusters(ctx, rt.Kubernetes, s.logger) {
 				cl, err := k8s.NewClient(cc)
 				if err != nil {
@@ -205,6 +234,17 @@ func (s *Supervisor) Apply(rt config.Runtime) {
 			}
 		}
 	}
+}
+
+// awsCfgForRegion returns ac, overriding its region only when region is set and
+// differs — so per-cluster EKS tokens are minted against the right region.
+func awsCfgForRegion(ac aws.Config, region string) aws.Config {
+	if region != "" && region != ac.Region {
+		c := ac.Copy()
+		c.Region = region
+		return c
+	}
+	return ac
 }
 
 func staticTok(tok string) func() string { return func() string { return tok } }

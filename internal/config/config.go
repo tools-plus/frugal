@@ -40,6 +40,10 @@ type K8sConfig struct {
 	// collected cluster; EKS exec-auth contexts are authenticated with tokens
 	// frugal mints from the configured AWS credentials. Encrypted at rest.
 	Kubeconfig string `json:"kubeconfig"`
+	// DiscoverEKS auto-discovers EKS clusters from the AWS API (eks:ListClusters
+	// + DescribeCluster) and collects from each with a minted token — no
+	// kubeconfig needed. Nil/absent defaults to on when AWS credentials resolve.
+	DiscoverEKS *bool `json:"discover_eks"`
 
 	// Legacy single-cluster fields (used only when clusters is empty).
 	Name                  string `json:"cluster_name"`
@@ -304,6 +308,10 @@ func (c AWSConfig) DiscoveryInterval() time.Duration {
 func (c K8sConfig) PollInterval() time.Duration {
 	return time.Duration(c.PollIntervalSeconds) * time.Second
 }
+
+// DiscoverEKSOn reports whether EKS auto-discovery is enabled (the default when
+// the field is unset).
+func (c K8sConfig) DiscoverEKSOn() bool { return c.DiscoverEKS == nil || *c.DiscoverEKS }
 
 // AuthDBPath resolves where the auth SQLite file lives: an explicit db_path,
 // else alongside the metrics db in data_dir, else the working directory.
