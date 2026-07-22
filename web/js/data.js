@@ -14,8 +14,8 @@ export async function ensureRing(id) {
 }
 export async function ensureHistory(id, range) {
   if (range <= RING_SPAN) return;
-  const meta = S.series.get(id);
-  if (!meta || (meta.labels||{}).source !== "cloudwatch") return;
+  // All sources now have long-range history: CloudWatch from the CloudWatch API,
+  // everything else (k8s/agent/native) from the persisted SQLite store.
   if ((S.histRange.get(id) || 0) >= range) return;
   S.histRange.set(id, range);
   const now = Math.floor(Date.now()/1000);

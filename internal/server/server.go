@@ -71,11 +71,15 @@ type Authenticator interface {
 // is reconfigured at runtime; the auth store is always present (it also holds
 // config), and AuthEnabled toggles whether the login is enforced.
 type Deps struct {
-	Store        *store.Store
-	Logs         *logstore.Store
-	Inv          *k8s.Inventory
-	Clusters     func() []Cluster
-	Hist         func() Historian
+	Store    *store.Store
+	Logs     *logstore.Store
+	Inv      *k8s.Inventory
+	Clusters func() []Cluster
+	Hist     func() Historian
+	// HistoryDB serves persisted history from the local store (all sources,
+	// including k8s/agent/native that have no external origin). nil when
+	// persistence is disabled. step > 1 downsamples into step-second buckets.
+	HistoryDB    func(id string, from, to, step int64) ([]store.Point, error)
 	Status       func() map[string]any
 	IngestToken  func() string
 	Authn        Authenticator
@@ -93,6 +97,7 @@ type Server struct {
 	inv         *k8s.Inventory
 	getClusters func() []Cluster
 	getHist     func() Historian
+	historyDB   func(id string, from, to, step int64) ([]store.Point, error)
 	getStatus   func() map[string]any
 	ingestToken func() string
 	authn       Authenticator // always non-nil (control store)
@@ -108,7 +113,7 @@ type Server struct {
 func New(d Deps) *Server {
 	s := &Server{
 		store: d.Store, logs: d.Logs, inv: d.Inv,
-		getClusters: d.Clusters, getHist: d.Hist, getStatus: d.Status, ingestToken: d.IngestToken,
+		getClusters: d.Clusters, getHist: d.Hist, historyDB: d.HistoryDB, getStatus: d.Status, ingestToken: d.IngestToken,
 		authn: d.Authn, authEnabled: d.AuthEnabled,
 		getConfig: d.GetConfig, saveConfig: d.SaveConfig, hasKey: d.HasSecretKey,
 		logger: d.Logger, assets: d.Assets,
@@ -215,13 +220,10 @@ func (s *Server) handleSeriesData(w http.ResponseWriter, r *http.Request) {
 }
 
 // GET /api/history?id=<series id>&from=<unix>&to=<unix>
-// Fetches straight from CloudWatch — for ranges beyond the ring buffer.
+// Long-range history beyond the in-memory ring. CloudWatch series are fetched
+// from CloudWatch (finer resolution, arbitrary range); every other source
+// (k8s, agent, native) is served from the persisted SQLite store.
 func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
-	hist := s.getHist()
-	if hist == nil {
-		http.Error(w, "history unavailable (aws collector disabled)", http.StatusServiceUnavailable)
-		return
-	}
 	q := r.URL.Query()
 	id := q.Get("id")
 	from, err1 := strconv.ParseInt(q.Get("from"), 10, 64)
@@ -234,14 +236,24 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "range too large (max 90 days)", http.StatusBadRequest)
 		return
 	}
+	labels, ok := s.store.Labels(id)
 	if isAdmin, allow := s.access(r); !isAdmin {
-		labels, ok := s.store.Labels(id)
 		if !ok || !allow(serviceOf(labels)) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
 		}
 	}
-	pts, err := hist.History(r.Context(), id, time.Unix(from, 0), time.Unix(to, 0))
+
+	var pts []store.Point
+	var err error
+	if labels["source"] == "cloudwatch" && s.getHist() != nil {
+		pts, err = s.getHist().History(r.Context(), id, time.Unix(from, 0), time.Unix(to, 0))
+	} else if s.historyDB != nil {
+		pts, err = s.historyDB(id, from, to, historyStep(to-from))
+	} else {
+		http.Error(w, "history unavailable (persistence disabled)", http.StatusServiceUnavailable)
+		return
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
@@ -250,6 +262,22 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 		pts = []store.Point{}
 	}
 	writeJSON(w, pts)
+}
+
+// historyStep picks a downsample bucket (seconds) for a DB history span, so a
+// wide range returns O(hundreds–thousands) of points rather than every raw
+// sample. Mirrors the CloudWatch period tiers. 0/1 means "raw, no bucketing".
+func historyStep(span int64) int64 {
+	switch {
+	case span <= 6*3600:
+		return 0
+	case span <= 48*3600:
+		return 60
+	case span <= 7*24*3600:
+		return 300
+	default:
+		return 3600
+	}
 }
 
 // GET /api/pods — served from the collectors' shared in-memory inventory

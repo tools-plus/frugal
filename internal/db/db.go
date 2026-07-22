@@ -55,7 +55,9 @@ CREATE TABLE IF NOT EXISTS pods (
 type DB struct {
 	sql    *sql.DB
 	logger *log.Logger
-	// RetentionHours bounds how much point history is kept (default 72).
+	// RetentionHours bounds how much point history is kept (default 168 = 7d,
+	// so the dashboard's 7d range has data for sources with no external history
+	// to re-query, e.g. Kubernetes and agent hosts).
 	RetentionHours int
 	// LogLinesPerSource bounds stored log lines per source (default 2000).
 	LogLinesPerSource int
@@ -80,7 +82,7 @@ func Open(dir string, logger *log.Logger) (*DB, error) {
 		return nil, fmt.Errorf("init schema: %w", err)
 	}
 	logger.Printf("db: sqlite ready at %s", path)
-	return &DB{sql: sq, logger: logger, RetentionHours: 72, LogLinesPerSource: 2000}, nil
+	return &DB{sql: sq, logger: logger, RetentionHours: 168, LogLinesPerSource: 2000}, nil
 }
 
 func (d *DB) Close() error { return d.sql.Close() }
@@ -162,6 +164,44 @@ func (d *DB) Hydrate(st *store.Store, ls *logstore.Store, inv *k8s.Inventory) {
 		np += len(pods)
 	}
 	d.logger.Printf("db: hydrated %d points, %d log lines, %d pods (%d series known)", n, nl, np, len(labels))
+}
+
+// ---------------------------------------------------------------- history
+
+// History returns persisted points for a series in [from,to] (unix seconds).
+// This is the long-range source for series that have no external origin to
+// re-query (Kubernetes, agent hosts, native pollers) — for those the SQLite
+// store is the system of record. When step > 1 the points are downsampled into
+// step-second buckets (averaged) so a wide range doesn't return tens of
+// thousands of raw points.
+func (d *DB) History(id string, from, to, step int64) ([]store.Point, error) {
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if step > 1 {
+		rows, err = d.sql.Query(
+			`SELECT (t/?)*? AS bucket, avg(v) FROM points
+			 WHERE series_id=? AND t>=? AND t<=? GROUP BY bucket ORDER BY bucket`,
+			step, step, id, from, to)
+	} else {
+		rows, err = d.sql.Query(
+			`SELECT t, v FROM points WHERE series_id=? AND t>=? AND t<=? ORDER BY t`,
+			id, from, to)
+	}
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []store.Point
+	for rows.Next() {
+		var p store.Point
+		if err := rows.Scan(&p.T, &p.V); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
 }
 
 // ---------------------------------------------------------------- persist

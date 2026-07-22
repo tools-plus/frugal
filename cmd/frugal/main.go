@@ -177,6 +177,12 @@ func runServer(ctx context.Context, cfg config.Config, logger *log.Logger) {
 				}
 				return nil
 			},
+			HistoryDB: func() func(id string, from, to, step int64) ([]store.Point, error) {
+				if sdb == nil {
+					return nil
+				}
+				return sdb.History
+			}(),
 			Status:       sup.Status,
 			IngestToken:  func() string { tokMu.RLock(); defer tokMu.RUnlock(); return ingestTok },
 			Authn:        ctrl,

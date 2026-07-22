@@ -281,10 +281,9 @@ export function buildPills() {
   const inLogs = sel && sel.view === "logs";
   box.style.display = inLogs ? "none" : "";
   document.getElementById("metricfilter").style.display = inLogs ? "none" : "";
-  const longOK = S.service !== "Hosts" && !(S.service === "EKS" && sel && sel.t !== "cp");
   for (const [secs, label] of RANGES) {
     const b = document.createElement("button");
-    b.className = "pill" + (secs === S.range ? " active" : "") + (!longOK && secs > RING_SPAN ? " hidden" : "");
+    b.className = "pill" + (secs === S.range ? " active" : "");
     b.textContent = label;
     b.onclick = () => { S.range = secs; renderMain(); };
     box.appendChild(b);

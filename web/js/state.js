@@ -10,7 +10,7 @@ export const S = {
   resource: null,   // flat services
   sel: null,        // EKS: {t:"cp"|"nodes"|"kind", cluster, kind, ns, wl, pod, node, view}
   exp: new Set(),
-  range: 3600, mfilter: "", rsearch: "",
+  range: 43200, mfilter: "", rsearch: "",
   status: null,
 };
 
@@ -31,7 +31,7 @@ export function svcConfigured(svc) {
 export const RING_SPAN = 6 * 3600;
 export const MEMBER_CAP = 12;
 export const PALETTE = ["#3fbfb4","#e8a33d","#9a7fdd","#d4537e","#5b9bd5","#97c459","#f09595","#b4b2a9","#6fbf73","#e25d4e","#c9d4e3","#8a6d3b"];
-export const RANGES = [[1800,"30m"],[3600,"1h"],[10800,"3h"],[21600,"6h"],[86400,"24h"],[259200,"3d"],[604800,"7d"]];
+export const RANGES = [[43200,"12h"],[86400,"24h"],[259200,"3d"],[604800,"7d"]];
 export const BOOT_T = Date.now();
 export const loadingOr = msg => (Date.now() - BOOT_T < 120000 ? "loading… collectors are warming up" : msg);
 export const KIND_ORDER = ["Deployment","StatefulSet","DaemonSet","Job","CronJob","ReplicaSet","Rollout","Pod"];

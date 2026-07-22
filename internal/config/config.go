@@ -171,7 +171,7 @@ type Config struct {
 	// polled series, points, logs, and pod inventory, hydrating the
 	// dashboard instantly on restart. Empty disables persistence.
 	DataDir string `json:"data_dir"`
-	// DBRetentionHours bounds how much point history SQLite keeps (default 72).
+	// DBRetentionHours bounds how much point history SQLite keeps (default 168 = 7d).
 	DBRetentionHours int `json:"db_retention_hours"`
 	// SecretKey encrypts credentials stored in the control DB (AWS keys, native
 	// passwords, ingest token). Keep it out of source control; the env var
