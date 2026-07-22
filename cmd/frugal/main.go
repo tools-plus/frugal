@@ -39,16 +39,38 @@ import (
 	"github.com/tools-plus/frugal/web"
 )
 
+// version is overridden at build time via -ldflags "-X main.version=<tag>".
+var version = "dev"
+
 func main() {
-	mode := "server"
 	args := os.Args[1:]
+
+	// Top-level help / version, before mode + flag parsing.
+	if len(args) > 0 {
+		switch args[0] {
+		case "version", "-version", "--version", "-v":
+			fmt.Printf("frugal %s\n", version)
+			return
+		case "help", "-help", "--help", "-h":
+			usage(os.Stdout)
+			return
+		}
+	}
+
+	mode := "server"
 	if len(args) > 0 && (args[0] == "server" || args[0] == "agent") {
 		mode = args[0]
 		args = args[1:]
 	}
 	fs := flag.NewFlagSet("frugal "+mode, flag.ExitOnError)
-	configPath := fs.String("config", "", "path to config.json (optional)")
+	configPath := fs.String("config", "", "path to a JSON config file (optional; env vars override)")
+	showVersion := fs.Bool("version", false, "print version and exit")
+	fs.Usage = func() { modeUsage(os.Stderr, mode, fs) }
 	fs.Parse(args)
+	if *showVersion {
+		fmt.Printf("frugal %s\n", version)
+		return
+	}
 
 	logger := log.New(os.Stderr, "", log.LstdFlags)
 	cfg, err := config.Load(*configPath)
@@ -67,6 +89,54 @@ func main() {
 	default:
 		runServer(ctx, cfg, logger)
 	}
+}
+
+// usage prints the top-level help (frugal help / frugal --help).
+func usage(w *os.File) {
+	fmt.Fprintf(w, `frugal %s — cheap, single-binary AWS + EKS observability
+
+Usage:
+  frugal [server] [-config FILE]   Web dashboard + collectors (default mode)
+  frugal agent    [-config FILE]   Agent: push host metrics + logs to a server
+  frugal version                   Print the version
+  frugal help                      Show this help
+
+Server mode serves the dashboard immediately from bootstrap config (listen,
+data_dir, secret_key, auth). What to collect (AWS/EKS/native targets and
+credentials) is configured live in Admin ▸ Settings, not in the config file.
+The config file is optional — every key can be set via an environment variable,
+and the env value wins.
+
+Key environment variables:
+  FRUGAL_LISTEN         bind address (default :8080)
+  FRUGAL_DATA_DIR       directory for the SQLite databases (enables persistence)
+  FRUGAL_SECRET_KEY     encrypts stored credentials (required to save secrets)
+  FRUGAL_AUTH_ENABLED   require login (default true)
+  AWS_REGION, AWS_PROFILE
+  FRUGAL_SERVER_URL     agent: the frugal server to push to
+  FRUGAL_TOKEN          agent: shared ingest token (matches the server's)
+
+Examples:
+  frugal                                         # server on :8080, config from env
+  FRUGAL_SECRET_KEY=$(openssl rand -hex 32) frugal
+  frugal server -config server.json
+  frugal agent  -config agent.json
+  docker run -p 8080:8080 -e FRUGAL_SECRET_KEY=... ghcr.io/tools-plus/frugal
+
+Docs: https://github.com/tools-plus/frugal
+`, version)
+}
+
+// modeUsage prints per-mode help (frugal server -h / frugal agent -h, or on a
+// bad flag).
+func modeUsage(w *os.File, mode string, fs *flag.FlagSet) {
+	if mode == "agent" {
+		fmt.Fprint(w, "frugal agent — push host metrics + logs to a frugal server\n\nUsage: frugal agent [-config FILE]\n\nFlags:\n")
+	} else {
+		fmt.Fprint(w, "frugal server — web dashboard + data collectors (default mode)\n\nUsage: frugal server [-config FILE]\n\nFlags:\n")
+	}
+	fs.PrintDefaults()
+	fmt.Fprint(w, "\nRun `frugal help` for environment variables and examples.\n")
 }
 
 func runServer(ctx context.Context, cfg config.Config, logger *log.Logger) {

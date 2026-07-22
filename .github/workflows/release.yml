@@ -45,7 +45,7 @@ jobs:
           GOARCH: ${{ matrix.arch }}
         run: |
           out="frugal-linux-${{ matrix.arch }}"
-          go build -trimpath -ldflags="-s -w" -o "$out" ./cmd/frugal
+          go build -trimpath -ldflags="-s -w -X main.version=${{ github.event.release.tag_name }}" -o "$out" ./cmd/frugal
           sha256sum "$out" > "$out.sha256"
 
       - name: Attach to release
@@ -92,6 +92,8 @@ jobs:
         with:
           context: .
           platforms: ${{ matrix.platform }}
+          build-args: |
+            VERSION=${{ github.event.release.tag_name }}
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
 
       - name: Export digest
