@@ -12,6 +12,7 @@ package collector
 import (
 	"context"
 	"log"
+	"sort"
 	"sync"
 	"time"
 
@@ -73,33 +74,21 @@ func (s *Supervisor) Apply(rt config.Runtime) {
 
 	run := func(f func()) { s.wg.Add(1); go func() { defer s.wg.Done(); f() }() }
 
-	// AWS — only when enabled and credentials resolve. The resolved config is
-	// reused for resource discovery below.
+	// AWS credentials — resolved once and reused by the CloudWatch collector,
+	// resource discovery, and the native pollers.
 	var awsCfg aws.Config
 	var awsOK bool
 	if rt.AWS.Enabled {
 		if ac, err := awsmetrics.LoadConfig(ctx, rt.AWS); err != nil {
-			s.logger.Printf("aws: collector not started: %v", err)
+			s.logger.Printf("aws: credentials unavailable: %v", err)
 		} else {
 			awsCfg, awsOK = ac, true
-			col := awsmetrics.NewWithConfig(ac, rt.AWS, s.st, s.logger)
-			s.aws = col
-			run(func() { col.Run(ctx) })
-			s.logger.Printf("aws: collector started (region=%q poll=%s)", rt.AWS.Region, rt.AWS.PollInterval())
-
-			// RDS Performance Insights — free DB-load metrics, direct from the
-			// PI API. Runs when RDS is a selected service; only PI-enabled
-			// instances produce data.
-			if namespaceSelected(rt.AWS, "AWS/RDS") {
-				pic := piwatch.New(awsCfg, rt.AWS, s.st, s.logger)
-				run(func() { pic.Run(ctx) })
-				s.logger.Printf("pi: RDS Performance Insights collector started")
-			}
 		}
 	}
 
 	// Native pollers: start from the configured targets, augmented by resources
 	// auto-discovered from the AWS APIs (free direct polling — no manual URLs).
+	// Done before the CloudWatch collector so it can drop superseded namespaces.
 	nat := rt.Native
 	if awsOK {
 		if disc, err := awsdiscovery.Valkey(ctx, awsCfg); err != nil {
@@ -119,6 +108,41 @@ func (s *Supervisor) Apply(rt config.Runtime) {
 		} else if len(disc) > 0 {
 			nat.RabbitMQ = mergeTargets(nat.RabbitMQ, disc, func(t config.RabbitTarget) (string, string) { return t.Name, t.URL })
 			s.logger.Printf("discovery: amazonmq found %d broker(s)", len(disc))
+		}
+	}
+
+	// CloudWatch collector. When native_supersedes_cloudwatch is set, drop the
+	// paid namespaces a native poller already covers for free so the same data
+	// isn't collected — and billed — twice.
+	if awsOK {
+		awsColCfg := rt.AWS
+		startCW := true
+		if rt.AWS.NativeSupersedesCloudWatch {
+			if dropped := supersededNamespaces(nat); len(dropped) > 0 {
+				reduced := subtractNamespaces(awsmetrics.EffectiveNamespaces(rt.AWS), dropped)
+				s.logger.Printf("aws: native supersedes cloudwatch — dropping %v", nsKeys(dropped))
+				if len(reduced) == 0 {
+					startCW = false // every selected namespace is covered by native
+					s.logger.Printf("aws: all selected namespaces covered by native — cloudwatch collector not started")
+				} else {
+					awsColCfg.Namespaces = reduced
+				}
+			}
+		}
+		if startCW {
+			col := awsmetrics.NewWithConfig(awsCfg, awsColCfg, s.st, s.logger)
+			s.aws = col
+			run(func() { col.Run(ctx) })
+			s.logger.Printf("aws: collector started (region=%q poll=%s)", rt.AWS.Region, rt.AWS.PollInterval())
+		}
+
+		// RDS Performance Insights — free DB-load metrics, direct from the PI
+		// API. Runs when RDS is selected; only PI-enabled instances produce data.
+		// Uses the original config — PI is never superseded by native.
+		if namespaceSelected(rt.AWS, "AWS/RDS") {
+			pic := piwatch.New(awsCfg, rt.AWS, s.st, s.logger)
+			run(func() { pic.Run(ctx) })
+			s.logger.Printf("pi: RDS Performance Insights collector started")
 		}
 	}
 	if n := len(nat.Valkey) + len(nat.OpenSearch) + len(nat.RabbitMQ); n > 0 {
@@ -226,6 +250,43 @@ func namespaceSelected(cfg config.AWSConfig, ns string) bool {
 		}
 	}
 	return false
+}
+
+// supersededNamespaces returns the paid CloudWatch namespaces that the given
+// native targets already cover for free, as a set.
+func supersededNamespaces(nat config.NativeConfig) map[string]bool {
+	out := map[string]bool{}
+	if len(nat.Valkey) > 0 {
+		out["AWS/ElastiCache"] = true
+	}
+	if len(nat.OpenSearch) > 0 {
+		out["AWS/ES"] = true
+	}
+	if len(nat.RabbitMQ) > 0 {
+		out["AWS/AmazonMQ"] = true
+	}
+	return out
+}
+
+// subtractNamespaces returns list with any namespace in drop removed.
+func subtractNamespaces(list []string, drop map[string]bool) []string {
+	out := make([]string, 0, len(list))
+	for _, ns := range list {
+		if !drop[ns] {
+			out = append(out, ns)
+		}
+	}
+	return out
+}
+
+// nsKeys returns the sorted keys of a namespace set (for stable logging).
+func nsKeys(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // mergeTargets combines manually-configured native targets with discovered

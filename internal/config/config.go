@@ -83,6 +83,12 @@ type AWSConfig struct {
 	DiscoveryIntervalMinutes int `json:"discovery_interval_minutes"`
 	// PeriodSeconds is the CloudWatch aggregation period requested.
 	PeriodSeconds int `json:"period_seconds"`
+	// NativeSupersedesCloudWatch drops the paid CloudWatch namespaces that a
+	// native poller already covers for free (ElastiCache/OpenSearch/AmazonMQ)
+	// so the same data isn't collected — and billed — twice. Off by default;
+	// only enable it once you've confirmed the native pollers are healthy, as
+	// there's no CloudWatch fallback for a superseded namespace.
+	NativeSupersedesCloudWatch bool `json:"native_supersedes_cloudwatch"`
 }
 
 // ---- native pollers (server mode): free in-VPC endpoints, no CloudWatch ----
