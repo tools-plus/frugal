@@ -12,6 +12,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -151,6 +152,19 @@ var dailyNamespaces = map[string]bool{
 	"AWS/S3": true,
 }
 
+// dailyPollInterval throttles how often daily-resolution namespaces are
+// fetched. They publish once per day, so polling them at the normal cadence
+// just re-reads the same datapoint and wastes GetMetricData spend. Hourly is
+// far more frequent than the data changes.
+const dailyPollInterval = time.Hour
+
+// usdPerMetricRead is the CloudWatch GetMetricData price: $0.01 per 1,000
+// metrics requested (first pricing tier; volume discounts are ignored, so the
+// estimate is an upper bound).
+const usdPerMetricRead = 0.01 / 1000
+
+const secondsPerMonth = 30 * 24 * 3600
+
 // resourceDims is the priority order for picking the dimension that names
 // "the resource" a series belongs to. Everything else becomes the variant.
 var resourceDims = []string{
@@ -183,6 +197,8 @@ type Collector struct {
 	lastErr  string
 	lastPoll time.Time
 	lastDisc time.Time
+
+	lastDaily time.Time // last time daily-resolution targets were fetched (poll() only)
 }
 
 // EffectiveNamespaces returns the namespaces a config would collect
@@ -206,15 +222,41 @@ func EffectiveNamespaces(cfg config.AWSConfig) []string {
 func (c *Collector) Status() map[string]any {
 	c.mu.RLock()
 	n := len(c.targets)
+	var regular, daily int
+	for _, t := range c.targets {
+		if dailyNamespaces[t.Namespace] {
+			daily++
+		} else {
+			regular++
+		}
+	}
 	c.mu.RUnlock()
 	c.stMu.Lock()
 	defer c.stMu.Unlock()
 	return map[string]any{
-		"targets":        n,
-		"last_error":     c.lastErr,
-		"last_poll":      c.lastPoll,
-		"last_discovery": c.lastDisc,
+		"targets":            n,
+		"cw_targets_regular": regular,
+		"cw_targets_daily":   daily,
+		"est_monthly_usd":    c.estMonthlyUSD(regular, daily),
+		"last_error":         c.lastErr,
+		"last_poll":          c.lastPoll,
+		"last_discovery":     c.lastDisc,
 	}
+}
+
+// estMonthlyUSD estimates the monthly GetMetricData spend from the target
+// counts and the configured poll cadence: regular targets are read every poll
+// interval, daily targets only on the slow daily cadence. Cost is per metric
+// requested, so this is targets × reads/month × price. Rounded to cents.
+func (c *Collector) estMonthlyUSD(regular, daily int) float64 {
+	pollT := c.cfg.PollIntervalSeconds
+	if pollT < 1 {
+		pollT = 300
+	}
+	regularReads := float64(regular) * float64(secondsPerMonth) / float64(pollT)
+	dailyReads := float64(daily) * float64(secondsPerMonth) / dailyPollInterval.Seconds()
+	usd := (regularReads + dailyReads) * usdPerMetricRead
+	return math.Round(usd*100) / 100
 }
 
 func (c *Collector) setErr(err error) {
@@ -505,7 +547,12 @@ func (c *Collector) poll(ctx context.Context) {
 		}
 	}
 	c.fetch(ctx, regular, end.Add(-time.Duration(window)*time.Second), end, period)
-	c.fetch(ctx, daily, end.Add(-50*time.Hour), end, 86400)
+	// Daily-resolution targets (S3 storage) publish once per day — fetch them on
+	// a slow cadence rather than every poll to avoid needless GetMetricData cost.
+	if len(daily) > 0 && time.Since(c.lastDaily) >= dailyPollInterval {
+		c.fetch(ctx, daily, end.Add(-50*time.Hour), end, 86400)
+		c.lastDaily = end
+	}
 }
 
 // fetch runs GetMetricData for a set of targets over [start,end] at the given
