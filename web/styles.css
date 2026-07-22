@@ -295,6 +295,9 @@ header h1 span { color: var(--muted); font-weight: 400; }
 #settings .sactions button:hover { opacity: .92; }
 .empty { color: var(--muted); padding: 70px 20px; text-align: center; font: 13px var(--mono); white-space: pre-line; }
 .u-legend { display: none; }
+/* Drag-to-zoom selection: uPlot's default is rgba(0,0,0,.07), invisible on the
+   dark theme. Use the accent with a solid border for a clearly visible region. */
+.u-select { background: rgba(63, 191, 180, 0.22); border: 1px solid var(--accent); box-sizing: border-box; }
 
 #drawer {
   position: fixed; left: 0; right: 0; bottom: 0; height: 42vh;
