@@ -20,8 +20,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatch"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatch/types"
 
-	"github.com/tools-plus/awsobs/internal/config"
-	"github.com/tools-plus/awsobs/internal/store"
+	"github.com/tools-plus/frugal/internal/config"
+	"github.com/tools-plus/frugal/internal/store"
 )
 
 type metricDef struct {

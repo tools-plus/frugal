@@ -17,11 +17,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tools-plus/awsobs/internal/auth"
-	"github.com/tools-plus/awsobs/internal/config"
-	"github.com/tools-plus/awsobs/internal/k8s"
-	"github.com/tools-plus/awsobs/internal/logstore"
-	"github.com/tools-plus/awsobs/internal/store"
+	"github.com/tools-plus/frugal/internal/auth"
+	"github.com/tools-plus/frugal/internal/config"
+	"github.com/tools-plus/frugal/internal/k8s"
+	"github.com/tools-plus/frugal/internal/logstore"
+	"github.com/tools-plus/frugal/internal/store"
 )
 
 // Historian answers on-demand range queries against the metric origin
@@ -388,7 +388,7 @@ func (s *Server) handleLogs(w http.ResponseWriter, r *http.Request) {
 
 // ---------------------------------------------------------------- sessions
 
-const sessionCookie = "awsobs_session"
+const sessionCookie = "frugal_session"
 
 // sessionUser returns the logged-in user for the request's session cookie.
 func (s *Server) sessionUser(r *http.Request) (string, bool) {

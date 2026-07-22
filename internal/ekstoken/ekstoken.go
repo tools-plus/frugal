@@ -1,5 +1,5 @@
 // Package ekstoken mints EKS API bearer tokens from AWS credentials — the same
-// token `aws eks get-token` produces, so awsobs can authenticate to an EKS
+// token `aws eks get-token` produces, so frugal can authenticate to an EKS
 // cluster's API without kubectl, aws-cli, or an exec plugin. The token is a
 // presigned STS GetCallerIdentity URL carrying the target cluster name in a
 // signed header; presigning is done locally (no network call), using the

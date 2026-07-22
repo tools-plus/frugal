@@ -1,4 +1,4 @@
-// Package config loads awsobs configuration from a JSON file with
+// Package config loads frugal configuration from a JSON file with
 // environment-variable overrides. JSON keeps the binary dependency-free.
 package config
 
@@ -27,7 +27,7 @@ type K8sConfig struct {
 	// PollIntervalSeconds for pod/node metrics (metrics-server resolution is ~15s).
 	PollIntervalSeconds int `json:"poll_interval_seconds"`
 	// Contexts are kubeconfig context names (`kubectl config get-contexts`).
-	// awsobs spawns and supervises a kubectl proxy per context — the easy
+	// frugal spawns and supervises a kubectl proxy per context — the easy
 	// path for local use. "*" expands to every context in the kubeconfig.
 	Contexts []string `json:"contexts"`
 	// Clusters are direct API endpoints (your own proxy, or api_url +
@@ -35,7 +35,7 @@ type K8sConfig struct {
 	Clusters []ClusterConfig `json:"clusters"`
 	// Kubeconfig is an uploaded kubeconfig (YAML). Each context becomes a
 	// collected cluster; EKS exec-auth contexts are authenticated with tokens
-	// awsobs mints from the configured AWS credentials. Encrypted at rest.
+	// frugal mints from the configured AWS credentials. Encrypted at rest.
 	Kubeconfig string `json:"kubeconfig"`
 
 	// Legacy single-cluster fields (used only when clusters is empty).
@@ -135,7 +135,7 @@ type AuthConfig struct {
 	// to on — only an explicit `false` disables auth.
 	Enabled *bool `json:"enabled"`
 	// DBPath is the auth SQLite file. Empty means <data_dir>/auth.db, or
-	// ./awsobs-auth.db when data_dir is unset.
+	// ./frugal-auth.db when data_dir is unset.
 	DBPath string `json:"db_path"`
 }
 
@@ -154,7 +154,7 @@ type Config struct {
 	// token. Empty means unauthenticated ingest (fine on localhost only).
 	IngestToken       string `json:"ingest_token"`
 	LogRetentionLines int    `json:"log_retention_lines"`
-	// DataDir enables SQLite persistence: <data_dir>/awsobs.db stores all
+	// DataDir enables SQLite persistence: <data_dir>/frugal.db stores all
 	// polled series, points, logs, and pod inventory, hydrating the
 	// dashboard instantly on restart. Empty disables persistence.
 	DataDir string `json:"data_dir"`
@@ -162,7 +162,7 @@ type Config struct {
 	DBRetentionHours int `json:"db_retention_hours"`
 	// SecretKey encrypts credentials stored in the control DB (AWS keys, native
 	// passwords, ingest token). Keep it out of source control; the env var
-	// AWSOBS_SECRET_KEY overrides this and is preferable in production.
+	// FRUGAL_SECRET_KEY overrides this and is preferable in production.
 	SecretKey string `json:"secret_key"`
 }
 
@@ -215,7 +215,7 @@ func Default() Config {
 }
 
 // Load reads path (optional; "" uses pure defaults) then applies env overrides:
-// AWSOBS_LISTEN, AWS_REGION, AWSOBS_K8S_API_URL, AWSOBS_K8S_TOKEN.
+// FRUGAL_LISTEN, AWS_REGION, FRUGAL_K8S_API_URL, FRUGAL_K8S_TOKEN.
 func Load(path string) (Config, error) {
 	cfg := Default()
 	if path != "" {
@@ -229,20 +229,20 @@ func Load(path string) (Config, error) {
 	}
 	// Bootstrap keys: each server.json field can also come from the environment,
 	// which wins over the file.
-	if v := os.Getenv("AWSOBS_LISTEN"); v != "" {
+	if v := os.Getenv("FRUGAL_LISTEN"); v != "" {
 		cfg.Listen = v
 	}
-	if v := os.Getenv("AWSOBS_DATA_DIR"); v != "" {
+	if v := os.Getenv("FRUGAL_DATA_DIR"); v != "" {
 		cfg.DataDir = v
 	}
-	if v := os.Getenv("AWSOBS_SECRET_KEY"); v != "" {
+	if v := os.Getenv("FRUGAL_SECRET_KEY"); v != "" {
 		cfg.SecretKey = v
 	}
-	if v := os.Getenv("AWSOBS_AUTH_ENABLED"); v != "" {
+	if v := os.Getenv("FRUGAL_AUTH_ENABLED"); v != "" {
 		b := v == "true" || v == "1"
 		cfg.Auth.Enabled = &b
 	}
-	if v := os.Getenv("AWSOBS_AUTH_DB_PATH"); v != "" {
+	if v := os.Getenv("FRUGAL_AUTH_DB_PATH"); v != "" {
 		cfg.Auth.DBPath = v
 	}
 	// Env overrides file — an explicitly exported AWS_REGION/AWS_PROFILE
@@ -253,28 +253,28 @@ func Load(path string) (Config, error) {
 	if v := os.Getenv("AWS_PROFILE"); v != "" {
 		cfg.AWS.Profile = v
 	}
-	if v := os.Getenv("AWSOBS_K8S_API_URL"); v != "" {
+	if v := os.Getenv("FRUGAL_K8S_API_URL"); v != "" {
 		cfg.Kubernetes.APIURL = v
 	}
-	if v := os.Getenv("AWSOBS_K8S_TOKEN"); v != "" {
+	if v := os.Getenv("FRUGAL_K8S_TOKEN"); v != "" {
 		cfg.Kubernetes.BearerToken = v
 	}
-	if v := os.Getenv("AWSOBS_SERVER_URL"); v != "" {
+	if v := os.Getenv("FRUGAL_SERVER_URL"); v != "" {
 		cfg.Agent.ServerURL = v
 	}
-	if v := os.Getenv("AWSOBS_TOKEN"); v != "" {
+	if v := os.Getenv("FRUGAL_TOKEN"); v != "" {
 		cfg.Agent.Token = v
 		if cfg.IngestToken == "" {
 			cfg.IngestToken = v
 		}
 	}
-	if v := os.Getenv("AWSOBS_INGEST_TOKEN"); v != "" {
+	if v := os.Getenv("FRUGAL_INGEST_TOKEN"); v != "" {
 		cfg.IngestToken = v
 	}
-	if v := os.Getenv("AWSOBS_AGENT_KUBELOGS"); v == "true" || v == "1" {
+	if v := os.Getenv("FRUGAL_AGENT_KUBELOGS"); v == "true" || v == "1" {
 		cfg.Agent.KubeLogs = true
 	}
-	if v := os.Getenv("AWSOBS_HOSTNAME"); v != "" {
+	if v := os.Getenv("FRUGAL_HOSTNAME"); v != "" {
 		cfg.Agent.Hostname = v
 	}
 	if cfg.AWS.PollIntervalSeconds < 30 {
@@ -305,5 +305,5 @@ func (c Config) AuthDBPath() string {
 	if c.DataDir != "" {
 		return filepath.Join(c.DataDir, "auth.db")
 	}
-	return "awsobs-auth.db"
+	return "frugal-auth.db"
 }

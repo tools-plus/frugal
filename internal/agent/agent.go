@@ -1,7 +1,7 @@
-// Package agent implements `awsobs agent`: a small push-mode collector for
+// Package agent implements `frugal agent`: a small push-mode collector for
 // EC2 instances and EKS nodes (as a DaemonSet). It reads host metrics from
 // /proc, tails log files (including /var/log/containers/*.log on Kubernetes
-// nodes), and ships everything to the awsobs server's ingest API.
+// nodes), and ships everything to the frugal server's ingest API.
 package agent
 
 import (
@@ -18,8 +18,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/tools-plus/awsobs/internal/config"
-	"github.com/tools-plus/awsobs/internal/store"
+	"github.com/tools-plus/frugal/internal/config"
+	"github.com/tools-plus/frugal/internal/store"
 )
 
 // IngestPoint mirrors the server's ingest wire format.
@@ -54,7 +54,7 @@ type Agent struct {
 
 func Run(ctx context.Context, cfg config.AgentConfig, logger *log.Logger) error {
 	if cfg.ServerURL == "" {
-		return fmt.Errorf("agent: server_url required (config agent.server_url or AWSOBS_SERVER_URL)")
+		return fmt.Errorf("agent: server_url required (config agent.server_url or FRUGAL_SERVER_URL)")
 	}
 	host := cfg.Hostname
 	if host == "" {

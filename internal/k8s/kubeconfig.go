@@ -9,7 +9,7 @@ import (
 
 // KubeCluster is one connectable cluster resolved from a kubeconfig context:
 // the API endpoint + CA, plus exactly one auth method. For EKS exec-auth
-// entries only the cluster name + region are captured — awsobs mints the token
+// entries only the cluster name + region are captured — frugal mints the token
 // itself (see internal/ekstoken) rather than running the exec plugin.
 type KubeCluster struct {
 	Name   string // context name (display)

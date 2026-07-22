@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tools-plus/awsobs/internal/config"
-	"github.com/tools-plus/awsobs/internal/store"
+	"github.com/tools-plus/frugal/internal/config"
+	"github.com/tools-plus/frugal/internal/store"
 )
 
 // ---------------------------------------------------------------- Valkey

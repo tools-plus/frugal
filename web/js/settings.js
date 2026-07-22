@@ -9,7 +9,7 @@ let root = null;
 
 const KEEP = "leave blank to keep";
 
-// The CloudWatch namespaces awsobs knows how to collect, with friendly labels.
+// The CloudWatch namespaces frugal knows how to collect, with friendly labels.
 // Rendered as checkboxes (we only support these — not an open-ended list).
 const AWS_NAMESPACES = [
   ["AWS/EC2", "EC2"], ["AWS/RDS", "RDS"], ["AWS/DocDB", "DocumentDB"],
@@ -31,7 +31,7 @@ function build() {
     '<div class="box">' +
       '<div class="sbar"><span class="stitle">Settings</span><span class="ssub" id="sSub"></span>' +
         '<button class="sclose" aria-label="Close">✕</button></div>' +
-      '<div class="skeywarn" id="sKeyWarn" hidden>⚠ AWSOBS_SECRET_KEY is not set — credentials can\'t be saved until it is.</div>' +
+      '<div class="skeywarn" id="sKeyWarn" hidden>⚠ FRUGAL_SECRET_KEY is not set — credentials can\'t be saved until it is.</div>' +
       '<div class="serr" id="sErr"></div>' +
       '<div class="sbody" id="sBody"></div>' +
       '<div class="sactions"><button id="sCancel">cancel</button><button id="sSave" class="primary">Save &amp; apply</button></div>' +

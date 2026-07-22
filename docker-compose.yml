@@ -1,23 +1,23 @@
-# awsobs server via Docker Compose — builds the binary from the Dockerfile and
+# frugal server via Docker Compose — builds the binary from the Dockerfile and
 # runs it in a container (dev == prod environment).
 #
-#   AWSOBS_SECRET_KEY=$(openssl rand -hex 32) docker compose up --build
+#   FRUGAL_SECRET_KEY=$(openssl rand -hex 32) docker compose up --build
 #
 # Then open http://localhost:8080 and log in as admin/admin. Configure what to
 # collect under Admin ▸ Settings — nothing service-specific lives here.
 services:
-  awsobs:
+  frugal:
     build: .
     ports:
       - "8080:8080"
     environment:
       # Master key that encrypts stored credentials. Set it in your shell (or an
       # .env file); never commit a real value.
-      AWSOBS_SECRET_KEY: "${AWSOBS_SECRET_KEY:?set AWSOBS_SECRET_KEY, e.g. export AWSOBS_SECRET_KEY=$(openssl rand -hex 32)}"
-      AWSOBS_DATA_DIR: "/data"
-      AWSOBS_LISTEN: ":8080"
+      FRUGAL_SECRET_KEY: "${FRUGAL_SECRET_KEY:?set FRUGAL_SECRET_KEY, e.g. export FRUGAL_SECRET_KEY=$(openssl rand -hex 32)}"
+      FRUGAL_DATA_DIR: "/data"
+      FRUGAL_LISTEN: ":8080"
     volumes:
-      - awsobs-data:/data
+      - frugal-data:/data
       # Local dev only: mount your AWS credentials read-only so you can leave the
       # keys blank in Settings and use your profile. Remove for production
       # (use IRSA / an instance role, or enter keys in the UI).
@@ -25,4 +25,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  awsobs-data:
+  frugal-data:

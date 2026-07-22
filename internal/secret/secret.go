@@ -1,5 +1,5 @@
 // Package secret encrypts credential values at rest with AES-256-GCM, keyed by
-// AWSOBS_SECRET_KEY. Ciphertext is stored as "enc:v1:<base64(nonce||ct)>", so
+// FRUGAL_SECRET_KEY. Ciphertext is stored as "enc:v1:<base64(nonce||ct)>", so
 // plaintext (legacy or non-secret) values pass through Decrypt unchanged.
 package secret
 
@@ -55,7 +55,7 @@ func (c *Cipher) Encrypt(plain string) (string, error) {
 		return plain, nil // already encrypted
 	}
 	if !c.Available() {
-		return "", errors.New("no secret key set (AWSOBS_SECRET_KEY) — cannot store credentials")
+		return "", errors.New("no secret key set (FRUGAL_SECRET_KEY) — cannot store credentials")
 	}
 	nonce := make([]byte, c.gcm.NonceSize())
 	if _, err := rand.Read(nonce); err != nil {
@@ -71,7 +71,7 @@ func (c *Cipher) Decrypt(s string) (string, error) {
 		return s, nil
 	}
 	if !c.Available() {
-		return "", errors.New("cannot decrypt: no secret key set (AWSOBS_SECRET_KEY)")
+		return "", errors.New("cannot decrypt: no secret key set (FRUGAL_SECRET_KEY)")
 	}
 	raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(s, prefix))
 	if err != nil {

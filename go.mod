@@ -1,4 +1,4 @@
-module github.com/tools-plus/awsobs
+module github.com/tools-plus/frugal
 
 go 1.24
 

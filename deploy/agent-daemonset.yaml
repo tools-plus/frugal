@@ -1,41 +1,41 @@
-# awsobs agent as an EKS DaemonSet: ships node host metrics + container
-# logs (/var/log/containers) to the awsobs server.
+# frugal agent as an EKS DaemonSet: ships node host metrics + container
+# logs (/var/log/containers) to the frugal server.
 apiVersion: v1
 kind: Secret
 metadata:
-  name: awsobs-agent
-  namespace: awsobs
+  name: frugal-agent
+  namespace: frugal
 stringData:
   token: CHANGE_ME_SHARED_INGEST_TOKEN
 ---
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: awsobs-agent
-  namespace: awsobs
+  name: frugal-agent
+  namespace: frugal
 spec:
   selector:
-    matchLabels: { app: awsobs-agent }
+    matchLabels: { app: frugal-agent }
   template:
     metadata:
-      labels: { app: awsobs-agent }
+      labels: { app: frugal-agent }
     spec:
       tolerations:
         - operator: Exists   # run on every node, including tainted ones
       containers:
         - name: agent
-          image: YOUR_ECR_REPO/awsobs:latest
+          image: YOUR_ECR_REPO/frugal:latest
           args: ["agent"]
           env:
-            - name: AWSOBS_SERVER_URL
+            - name: FRUGAL_SERVER_URL
               # in-cluster server; or http://<micro-ec2-ip>:8080 if outside
-              value: http://awsobs.awsobs.svc.cluster.local
-            - name: AWSOBS_TOKEN
+              value: http://frugal.frugal.svc.cluster.local
+            - name: FRUGAL_TOKEN
               valueFrom:
-                secretKeyRef: { name: awsobs-agent, key: token }
-            - name: AWSOBS_AGENT_KUBELOGS
+                secretKeyRef: { name: frugal-agent, key: token }
+            - name: FRUGAL_AGENT_KUBELOGS
               value: "true"
-            - name: AWSOBS_HOSTNAME
+            - name: FRUGAL_HOSTNAME
               valueFrom:
                 fieldRef: { fieldPath: spec.nodeName }
           resources:

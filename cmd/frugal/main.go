@@ -1,7 +1,7 @@
-// awsobs — a single-binary AWS + EKS observability tool with two modes:
+// frugal — a single-binary AWS + EKS observability tool with two modes:
 //
-//	awsobs server -config config.json   # web dashboard + data collectors
-//	awsobs agent  -config agent.json    # push host metrics/logs to a server
+//	frugal server -config config.json   # web dashboard + data collectors
+//	frugal agent  -config agent.json    # push host metrics/logs to a server
 //
 // In server mode the binary runs in two parts: Part 1, the web server, comes up
 // immediately from bootstrap config (listen, data_dir, auth). Part 2, the data
@@ -23,17 +23,17 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/tools-plus/awsobs/internal/agent"
-	"github.com/tools-plus/awsobs/internal/auth"
-	"github.com/tools-plus/awsobs/internal/collector"
-	"github.com/tools-plus/awsobs/internal/config"
-	"github.com/tools-plus/awsobs/internal/db"
-	"github.com/tools-plus/awsobs/internal/k8s"
-	"github.com/tools-plus/awsobs/internal/logstore"
-	"github.com/tools-plus/awsobs/internal/secret"
-	"github.com/tools-plus/awsobs/internal/server"
-	"github.com/tools-plus/awsobs/internal/store"
-	"github.com/tools-plus/awsobs/web"
+	"github.com/tools-plus/frugal/internal/agent"
+	"github.com/tools-plus/frugal/internal/auth"
+	"github.com/tools-plus/frugal/internal/collector"
+	"github.com/tools-plus/frugal/internal/config"
+	"github.com/tools-plus/frugal/internal/db"
+	"github.com/tools-plus/frugal/internal/k8s"
+	"github.com/tools-plus/frugal/internal/logstore"
+	"github.com/tools-plus/frugal/internal/secret"
+	"github.com/tools-plus/frugal/internal/server"
+	"github.com/tools-plus/frugal/internal/store"
+	"github.com/tools-plus/frugal/web"
 )
 
 func main() {
@@ -43,7 +43,7 @@ func main() {
 		mode = args[0]
 		args = args[1:]
 	}
-	fs := flag.NewFlagSet("awsobs "+mode, flag.ExitOnError)
+	fs := flag.NewFlagSet("frugal "+mode, flag.ExitOnError)
 	configPath := fs.String("config", "", "path to config.json (optional)")
 	fs.Parse(args)
 
@@ -71,7 +71,7 @@ func runServer(ctx context.Context, cfg config.Config, logger *log.Logger) {
 	// runtime config. The master key comes from the environment.
 	cipher := secret.New(cfg.SecretKey)
 	if !cipher.Available() {
-		logger.Printf("WARNING: no secret_key set (server.json secret_key or AWSOBS_SECRET_KEY) — credentials can't be stored or used until it is")
+		logger.Printf("WARNING: no secret_key set (server.json secret_key or FRUGAL_SECRET_KEY) — credentials can't be stored or used until it is")
 	}
 	ctrl, err := auth.Open(cfg.AuthDBPath(), cipher, logger)
 	if err != nil {

@@ -1,7 +1,13 @@
 .DS_Store
-awsobs-linux
+frugal-linux
 server.json
 agent.json
 .snapshot
 .playwright-mcp/
 .env
+
+# SQLite control/metric databases (created at runtime)
+*.db
+*.db-shm
+*.db-wal
+/data/

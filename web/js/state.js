@@ -70,7 +70,7 @@ export const isLive = svc => !!(SVCMETA[svc] && SVCMETA[svc].live);
 // The current selection lives only in S, so a browser refresh would reset it.
 // Persist the navigation state (which service/resource/EKS selection + range)
 // to localStorage on every render and restore it on boot — see restoreNav().
-const NAV_KEY = "awsobs.nav";
+const NAV_KEY = "frugal.nav";
 export function saveNav() {
   try {
     localStorage.setItem(NAV_KEY, JSON.stringify({

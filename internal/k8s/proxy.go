@@ -14,7 +14,7 @@ import (
 
 // This file lets config reference kubeconfig contexts directly
 // (kubernetes.contexts: ["plane-eks-dev", ...] or ["*"]). For each context
-// awsobs spawns and supervises its own `kubectl proxy` on a local ephemeral
+// frugal spawns and supervises its own `kubectl proxy` on a local ephemeral
 // port — kubectl keeps handling auth (EKS exec plugins, token refresh,
 // client certs), so any context that works for `kubectl get pods` works
 // here without client-go.

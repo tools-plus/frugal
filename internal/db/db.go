@@ -14,9 +14,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/tools-plus/awsobs/internal/k8s"
-	"github.com/tools-plus/awsobs/internal/logstore"
-	"github.com/tools-plus/awsobs/internal/store"
+	"github.com/tools-plus/frugal/internal/k8s"
+	"github.com/tools-plus/frugal/internal/logstore"
+	"github.com/tools-plus/frugal/internal/store"
 )
 
 const schema = `
@@ -58,7 +58,7 @@ type DB struct {
 	LogLinesPerSource int
 }
 
-// Open creates/opens <dir>/awsobs.db and ensures the schema exists.
+// Open creates/opens <dir>/frugal.db and ensures the schema exists.
 func Open(dir string, logger *log.Logger) (*DB, error) {
 	if !driverAvailable {
 		return nil, fmt.Errorf("sqlite driver not compiled in (build with CGO_ENABLED=1, or swap the driver import to modernc.org/sqlite)")
@@ -66,7 +66,7 @@ func Open(dir string, logger *log.Logger) (*DB, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
-	path := filepath.Join(dir, "awsobs.db")
+	path := filepath.Join(dir, "frugal.db")
 	sq, err := sql.Open(driverName, path+"?_busy_timeout=5000")
 	if err != nil {
 		return nil, err

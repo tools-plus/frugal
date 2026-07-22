@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/tools-plus/awsobs/internal/config"
+	"github.com/tools-plus/frugal/internal/config"
 )
 
 // HasSecretKey reports whether a secret encryption key is configured. Without

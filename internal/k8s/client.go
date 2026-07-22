@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/tools-plus/awsobs/internal/config"
+	"github.com/tools-plus/frugal/internal/config"
 )
 
 const (

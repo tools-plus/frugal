@@ -1,26 +1,26 @@
-# Deploy awsobs inside the EKS cluster. This gives it:
+# Deploy frugal inside the EKS cluster. This gives it:
 #   - metrics.k8s.io + pod + log access via the ServiceAccount (RBAC below)
 #   - CloudWatch read access via IRSA (annotate the ServiceAccount with an
 #     IAM role that has cloudwatch:ListMetrics + cloudwatch:GetMetricData)
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: awsobs
+  name: frugal
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: awsobs
-  namespace: awsobs
+  name: frugal
+  namespace: frugal
   annotations:
     # Replace with your IRSA role. Minimal policy:
     #   cloudwatch:ListMetrics, cloudwatch:GetMetricData on *
-    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/awsobs-cloudwatch-read
+    eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/frugal-cloudwatch-read
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: awsobs-read
+  name: frugal-read
 rules:
   - apiGroups: [""]
     resources: ["pods", "pods/log", "nodes"]
@@ -32,34 +32,34 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: awsobs-read
+  name: frugal-read
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: awsobs-read
+  name: frugal-read
 subjects:
   - kind: ServiceAccount
-    name: awsobs
-    namespace: awsobs
+    name: frugal
+    namespace: frugal
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: awsobs
-  namespace: awsobs
+  name: frugal
+  namespace: frugal
 spec:
   replicas: 1
   selector:
-    matchLabels: { app: awsobs }
+    matchLabels: { app: frugal }
   template:
     metadata:
-      labels: { app: awsobs }
+      labels: { app: frugal }
     spec:
-      serviceAccountName: awsobs
+      serviceAccountName: frugal
       containers:
-        - name: awsobs
-          image: YOUR_ECR_REPO/awsobs:latest
-          args: ["-config", "/etc/awsobs/config.json"]
+        - name: frugal
+          image: YOUR_ECR_REPO/frugal:latest
+          args: ["-config", "/etc/frugal/config.json"]
           env:
             - name: AWS_REGION
               value: ap-south-1
@@ -70,17 +70,17 @@ spec:
             limits: { memory: 512Mi }
           volumeMounts:
             - name: config
-              mountPath: /etc/awsobs
+              mountPath: /etc/frugal
       volumes:
         - name: config
           configMap:
-            name: awsobs-config
+            name: frugal-config
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: awsobs-config
-  namespace: awsobs
+  name: frugal-config
+  namespace: frugal
 data:
   config.json: |
     {
@@ -92,12 +92,12 @@ data:
 apiVersion: v1
 kind: Service
 metadata:
-  name: awsobs
-  namespace: awsobs
+  name: frugal
+  namespace: frugal
 spec:
-  selector: { app: awsobs }
+  selector: { app: frugal }
   ports:
     - port: 80
       targetPort: 8080
-  # Access with: kubectl -n awsobs port-forward svc/awsobs 8080:80
+  # Access with: kubectl -n frugal port-forward svc/frugal 8080:80
   # (Put it behind your ingress + auth before exposing it wider.)
