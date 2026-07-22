@@ -7,16 +7,21 @@ awsobs server   # web dashboard + data collectors (default when no subcommand)
 awsobs agent    # push host metrics + logs from EC2 / EKS nodes to a server
 ```
 
-It collects CloudWatch metrics for managed services (EC2, RDS, DocumentDB,
+It collects metrics for AWS managed services (EC2, RDS, DocumentDB,
 ElastiCache/Valkey, AmazonMQ ActiveMQ + RabbitMQ, OpenSearch, S3, ALB, NLB, EKS
-control plane, Container Insights) and live pod/node CPU + memory from EKS
-clusters, streams pod logs, and serves a live dashboard — no Prometheus, no
+control plane, Container Insights) — via CloudWatch where that's the only source,
+and via **free native endpoints** (Redis `INFO`, OpenSearch stats, the RabbitMQ
+management API, RDS Performance Insights) where one exists. It also collects live
+pod/node CPU + memory from EKS clusters, ingests host metrics + logs pushed by a
+bundled agent, streams pod logs, and serves a live dashboard — no Prometheus, no
 external database, no third-party agents required.
 
 ```
-CloudWatch API ─┐
-                ├─▶ collectors ─▶ in-memory ring buffers ─▶ HTTP + SSE ─▶ live dashboard
-EKS APIs ───────┘     (Go)          (+ optional SQLite)                    (embedded HTML)
+CloudWatch API ─────┐
+Native endpoints ───┤
+RDS Perf Insights ──┼─▶ collectors ─▶ in-memory ring buffers ─▶ HTTP + SSE ─▶ live dashboard
+EKS APIs ───────────┤     (Go)          (+ optional SQLite)                    (embedded HTML)
+Agent push (/proc) ─┘
 ```
 
 ## Architecture: two parts, one binary
@@ -35,19 +40,63 @@ In `server` mode the process runs as two parts:
 Runtime config is edited in the dashboard (**Admin ▸ Settings**) and stored,
 encrypted, in the control database — not in `server.json`.
 
-## Hybrid collection (why this is cheap)
+## Data sources & cost
 
-The server prefers **native, free endpoints** over CloudWatch wherever they
-exist, and uses CloudWatch only for what has no alternative:
+awsobs pulls from five kinds of source. **Only CloudWatch `GetMetricData` is
+billable** — everything else is free. Each series' origin is encoded in its ID
+prefix (`cw|`, `nv|`, `pi|`, `k8s|`, `ag|`), so you can always tell what a chart
+is costing you.
 
-| Source | How | Cost | Resolution |
-|---|---|---|---|
-| Valkey / ElastiCache | `INFO` over the redis protocol | free | seconds |
-| OpenSearch | `_cluster/health`, `_nodes/stats` | free | seconds |
-| AmazonMQ (RabbitMQ) | management HTTP API | free | seconds |
-| EC2 / hosts | `awsobs agent` reading /proc, pushed | free | seconds |
-| EKS pods/nodes | metrics-server + kubelet log API | free | ~15s |
-| ALB / NLB / S3 / RDS / DocDB host CPU+RAM / EKS control plane | CloudWatch `GetMetricData` | ~$0.01 / 1k metrics | 300s default |
+| Source | Prefix | How | Cost | Resolution |
+|---|---|---|---|---|
+| CloudWatch | `cw\|` | `ListMetrics` + `GetMetricData` (batched ≤500/call) | 💰 ~$0.01 / 1k metrics | 300s default |
+| Native — Valkey / ElastiCache | `nv\|` | `INFO` over the Redis protocol | free | seconds |
+| Native — OpenSearch | `nv\|` | `_cluster/health` + `_nodes/stats` | free | seconds |
+| Native — AmazonMQ (RabbitMQ) | `nv\|` | management HTTP API | free | seconds |
+| RDS Performance Insights | `pi\|` | `pi:GetResourceMetrics` — DB load / active sessions | free (7-day retention) | 60s |
+| EKS pods / nodes | `k8s\|` | metrics-server (`metrics.k8s.io`) + kubelet log API | free | ~15s |
+| EC2 / host agent | `ag\|` | `awsobs agent` reads `/proc`, pushes to the server | free | seconds |
+
+CloudWatch is the **only** source for ALB, NLB, S3, RDS/DocDB host CPU+RAM, and
+the EKS control plane — there's no free alternative for those.
+
+### Native and CloudWatch run *together*, not either/or
+
+For the three services that have both a CloudWatch namespace and a native
+endpoint — **ElastiCache, OpenSearch, and AmazonMQ** — awsobs collects **both by
+default**. The AWS collector discovers every default namespace (which includes
+`AWS/ElastiCache`, `AWS/ES`, `AWS/AmazonMQ`), and *in parallel* the discovery
+layer auto-finds those same resources' endpoints and starts the free native
+pollers on them. The result is two series per metric family — a paid `cw|…` and a
+free `nv|…` — which is handy for side-by-side comparison but means you're **still
+paying CloudWatch** for services you could monitor for free.
+
+To go **free-only** for those services, narrow the AWS **namespaces** in
+**Admin ▸ Settings** so the paid namespaces (`AWS/ElastiCache`, `AWS/ES`,
+`AWS/AmazonMQ`) are dropped, and let the native pollers cover them. There is no
+automatic suppression — trimming the namespace list is the opt-out.
+
+Resource discovery itself (`DescribeCacheClusters`, `ListDomainNames` /
+`DescribeDomains`, `ListBrokers` / `DescribeBroker`, `DescribeDBInstances`) uses
+**free** AWS control-plane APIs; only CloudWatch `GetMetricData` is billed.
+
+### The agent is always free (and never touches CloudWatch)
+
+`awsobs agent` makes **zero AWS API calls**. It reads host CPU / memory / network
+/ load from `/proc`, tails log globs, and HTTP-pushes both to *your* awsobs server
+over the bearer-token'd `/api/ingest*` endpoints — it never calls CloudWatch and
+never uses `PutMetricData`. So collecting EC2 / host metrics via the agent costs
+**$0**, compared with:
+
+| Getting EC2 host metrics via… | CloudWatch cost |
+|---|---|
+| `awsobs agent` (`/proc` → your server) | **$0** — no AWS API calls |
+| CloudWatch `AWS/EC2` namespace (`GetMetricData`) | 💰 per metric read |
+| CloudWatch agent / `PutMetricData` custom metrics | 💰 custom-metric + API charges |
+
+The only possible cost is ordinary **network egress**, and only if the agent and
+server sit in different AZs / regions or talk over the internet; same-region,
+in-VPC traffic to your own server is free.
 
 ## Configuration: bootstrap vs runtime
 
@@ -147,6 +196,29 @@ to the server, using the **ingest token** you set in Settings.
   `AWSOBS_TOKEN` (the token must match the server's ingest token).
 
 ## Developer view
+
+### Quickest local run — Docker Compose
+
+The easiest way to run awsobs locally is the bundled `docker-compose.yml`: it
+builds the binary from the Dockerfile and runs it in a container — the dev
+environment matches production, and there's no Go toolchain to install.
+
+```bash
+export AWSOBS_SECRET_KEY=$(openssl rand -hex 32)   # encrypts stored credentials
+docker compose up --build
+# open http://localhost:8080 → log in as admin/admin → set a new password →
+# configure AWS / EKS / native targets under Admin ▸ Settings.
+```
+
+- All state (users, roles, encrypted runtime config, metric history) persists in
+  the `awsobs-data` named volume, so it survives `docker compose down`/`up`.
+- To use your **local AWS profile** instead of entering keys in the UI, uncomment
+  the `~/.aws:/root/.aws:ro` mount in `docker-compose.yml` and leave the AWS keys
+  blank in Settings (export `AWS_REGION` / `AWS_PROFILE` as needed).
+- To connect to **EKS**, configure Kubernetes under Admin ▸ Settings (see
+  "How it collects" for the node/pod-metrics requirements).
+
+### Run from source
 
 Prerequisites: **Go ≥ 1.24** (required by the AWS SDK service clients), and for EKS work `kubectl` access plus
 metrics-server in the cluster.
