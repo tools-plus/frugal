@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 tools-plus
+
 // Package native polls managed services over their own free, in-VPC
 // endpoints instead of CloudWatch: Valkey/Redis INFO, OpenSearch stats
 // APIs, and the RabbitMQ management API. Same store, same dashboard,

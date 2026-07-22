@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 tools-plus
+
 // Package awsdiscovery uses the AWS Describe/List APIs (the same access keys the
 // CloudWatch collector uses) to enumerate resources and their endpoints, so the
 // free direct pollers can auto-attach without the operator hand-entering

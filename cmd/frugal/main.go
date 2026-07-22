@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 tools-plus
+
 // frugal — a single-binary AWS + EKS observability tool with two modes:
 //
 //	frugal server -config config.json   # web dashboard + data collectors

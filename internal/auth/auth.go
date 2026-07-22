@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 tools-plus
+
 // Package auth is a small user/session store backed by its own SQLite file,
 // separate from the metrics database. On first setup it seeds a default
 // admin/admin user flagged must-change, so the operator is forced to pick a

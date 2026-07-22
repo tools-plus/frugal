@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 tools-plus
+
 // Package config loads frugal configuration from a JSON file with
 // environment-variable overrides. JSON keeps the binary dependency-free.
 package config

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 tools-plus
+
 // Package db is the SQLite system of record. The in-memory store stays the
 // hot read path; this package hydrates it on boot and persists everything
 // (series metadata, points, logs, pod inventory) in the background, so a

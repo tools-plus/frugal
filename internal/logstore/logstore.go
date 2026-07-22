@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 tools-plus
+
 // Package logstore keeps recent log lines shipped by agents, per source
 // (e.g. "host/ip-10-0-1-5" or "pod/default/web-7f9c"), with pub/sub so the
 // dashboard can live-tail them.

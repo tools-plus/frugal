@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 tools-plus
+
 // Package store keeps recent time-series data in per-series ring buffers
 // and fans out live updates to subscribers (the SSE endpoint).
 package store

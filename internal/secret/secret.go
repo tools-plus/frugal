@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 tools-plus
+
 // Package secret encrypts credential values at rest with AES-256-GCM, keyed by
 // FRUGAL_SECRET_KEY. Ciphertext is stored as "enc:v1:<base64(nonce||ct)>", so
 // plaintext (legacy or non-secret) values pass through Decrypt unchanged.

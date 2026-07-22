@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 tools-plus
+
 // Package ekstoken mints EKS API bearer tokens from AWS credentials — the same
 // token `aws eks get-token` produces, so frugal can authenticate to an EKS
 // cluster's API without kubectl, aws-cli, or an exec plugin. The token is a

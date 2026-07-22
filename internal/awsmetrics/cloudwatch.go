@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 tools-plus
+
 // Package awsmetrics collects metrics for AWS managed services via
 // CloudWatch. Discovery uses ListMetrics (one AWS API dependency, no
 // per-service Describe* clients) and collection uses GetMetricData batched

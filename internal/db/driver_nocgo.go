@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 tools-plus
+
 //go:build !cgo
 
 // Without cgo (e.g. CGO_ENABLED=0 cross-builds for agents) the sqlite

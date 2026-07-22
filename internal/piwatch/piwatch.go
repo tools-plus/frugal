@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 tools-plus
+
 // Package piwatch pulls RDS Performance Insights metrics (db load / active
 // sessions) directly from the pi:GetResourceMetrics API — a free (7-day
 // retention) source that complements the CloudWatch RDS metrics with DB-level

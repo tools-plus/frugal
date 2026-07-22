@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 tools-plus
+
 // Package collector is the supervised data-collection service ("Part 2"): it
 // starts the AWS, native, and Kubernetes collectors from a runtime config and
 // can tear them all down and relaunch with new config — without restarting the

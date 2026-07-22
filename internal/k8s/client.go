@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 tools-plus
+
 // Package k8s is a deliberately tiny Kubernetes REST client. We only need
 // three read paths (metrics.k8s.io, pod lists, pod logs), so plain HTTP
 // beats pulling in the whole of client-go.

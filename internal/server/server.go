@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 tools-plus
+
 // Package server exposes the dashboard and its APIs. Live data flows over
 // Server-Sent Events — one-directional push is all a chart needs, and it
 // keeps the binary free of websocket dependencies.

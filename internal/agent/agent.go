@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+// Copyright (C) 2026 tools-plus
+
 // Package agent implements `frugal agent`: a small push-mode collector for
 // EC2 instances and EKS nodes (as a DaemonSet). It reads host metrics from
 // /proc, tails log files (including /var/log/containers/*.log on Kubernetes
