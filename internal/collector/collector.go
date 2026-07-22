@@ -14,15 +14,15 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 
-	"github.com/example/awsobs/internal/awsdiscovery"
-	"github.com/example/awsobs/internal/awsmetrics"
-	"github.com/example/awsobs/internal/config"
-	"github.com/example/awsobs/internal/ekstoken"
-	"github.com/example/awsobs/internal/piwatch"
-	"github.com/example/awsobs/internal/k8s"
-	"github.com/example/awsobs/internal/logstore"
-	"github.com/example/awsobs/internal/native"
-	"github.com/example/awsobs/internal/store"
+	"github.com/tools-plus/awsobs/internal/awsdiscovery"
+	"github.com/tools-plus/awsobs/internal/awsmetrics"
+	"github.com/tools-plus/awsobs/internal/config"
+	"github.com/tools-plus/awsobs/internal/ekstoken"
+	"github.com/tools-plus/awsobs/internal/piwatch"
+	"github.com/tools-plus/awsobs/internal/k8s"
+	"github.com/tools-plus/awsobs/internal/logstore"
+	"github.com/tools-plus/awsobs/internal/native"
+	"github.com/tools-plus/awsobs/internal/store"
 )
 
 // Cluster pairs a resolved cluster name with its API client (for log streaming).

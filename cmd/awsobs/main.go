@@ -23,17 +23,17 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/example/awsobs/internal/agent"
-	"github.com/example/awsobs/internal/auth"
-	"github.com/example/awsobs/internal/collector"
-	"github.com/example/awsobs/internal/config"
-	"github.com/example/awsobs/internal/db"
-	"github.com/example/awsobs/internal/k8s"
-	"github.com/example/awsobs/internal/logstore"
-	"github.com/example/awsobs/internal/secret"
-	"github.com/example/awsobs/internal/server"
-	"github.com/example/awsobs/internal/store"
-	"github.com/example/awsobs/web"
+	"github.com/tools-plus/awsobs/internal/agent"
+	"github.com/tools-plus/awsobs/internal/auth"
+	"github.com/tools-plus/awsobs/internal/collector"
+	"github.com/tools-plus/awsobs/internal/config"
+	"github.com/tools-plus/awsobs/internal/db"
+	"github.com/tools-plus/awsobs/internal/k8s"
+	"github.com/tools-plus/awsobs/internal/logstore"
+	"github.com/tools-plus/awsobs/internal/secret"
+	"github.com/tools-plus/awsobs/internal/server"
+	"github.com/tools-plus/awsobs/internal/store"
+	"github.com/tools-plus/awsobs/web"
 )
 
 func main() {

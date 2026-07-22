@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/example/awsobs/internal/config"
-	"github.com/example/awsobs/internal/store"
+	"github.com/tools-plus/awsobs/internal/config"
+	"github.com/tools-plus/awsobs/internal/store"
 )
 
 // Collector polls the metrics.k8s.io API (backed by metrics-server, which

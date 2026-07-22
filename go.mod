@@ -1,4 +1,4 @@
-module github.com/example/awsobs
+module github.com/tools-plus/awsobs
 
 go 1.24
 

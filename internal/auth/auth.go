@@ -19,7 +19,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
-	"github.com/example/awsobs/internal/secret"
+	"github.com/tools-plus/awsobs/internal/secret"
 )
 
 const schema = `

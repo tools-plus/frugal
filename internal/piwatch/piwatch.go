@@ -17,8 +17,8 @@ import (
 	pitypes "github.com/aws/aws-sdk-go-v2/service/pi/types"
 	"github.com/aws/aws-sdk-go-v2/service/rds"
 
-	"github.com/example/awsobs/internal/config"
-	"github.com/example/awsobs/internal/store"
+	"github.com/tools-plus/awsobs/internal/config"
+	"github.com/tools-plus/awsobs/internal/store"
 )
 
 // piMetrics are the Performance Insights metrics we pull, with dashboard names.

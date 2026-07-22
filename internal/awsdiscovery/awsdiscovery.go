@@ -16,7 +16,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/mq"
 	"github.com/aws/aws-sdk-go-v2/service/opensearch"
 
-	"github.com/example/awsobs/internal/config"
+	"github.com/tools-plus/awsobs/internal/config"
 )
 
 // Valkey discovers ElastiCache (Redis/Valkey) node endpoints. Passwords are

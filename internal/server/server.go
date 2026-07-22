@@ -17,11 +17,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/example/awsobs/internal/auth"
-	"github.com/example/awsobs/internal/config"
-	"github.com/example/awsobs/internal/k8s"
-	"github.com/example/awsobs/internal/logstore"
-	"github.com/example/awsobs/internal/store"
+	"github.com/tools-plus/awsobs/internal/auth"
+	"github.com/tools-plus/awsobs/internal/config"
+	"github.com/tools-plus/awsobs/internal/k8s"
+	"github.com/tools-plus/awsobs/internal/logstore"
+	"github.com/tools-plus/awsobs/internal/store"
 )
 
 // Historian answers on-demand range queries against the metric origin

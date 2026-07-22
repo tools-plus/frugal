@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/example/awsobs/internal/config"
-	"github.com/example/awsobs/internal/store"
+	"github.com/tools-plus/awsobs/internal/config"
+	"github.com/tools-plus/awsobs/internal/store"
 )
 
 func httpGetJSON(ctx context.Context, url, user, pass string, insecure bool, out any) error {

@@ -152,7 +152,7 @@ Prerequisites: **Go ≥ 1.24** (required by the AWS SDK service clients), and fo
 metrics-server in the cluster.
 
 ```bash
-git clone https://github.com/mguptahub/awsobs && cd awsobs
+git clone https://github.com/tools-plus/awsobs && cd awsobs
 go mod download
 
 # minimal local bootstrap config

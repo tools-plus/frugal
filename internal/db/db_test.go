@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/example/awsobs/internal/k8s"
-	"github.com/example/awsobs/internal/logstore"
-	"github.com/example/awsobs/internal/store"
+	"github.com/tools-plus/awsobs/internal/k8s"
+	"github.com/tools-plus/awsobs/internal/logstore"
+	"github.com/tools-plus/awsobs/internal/store"
 )
 
 func TestPersistAndHydrate(t *testing.T) {
