@@ -371,3 +371,15 @@ via `/api/history`.
 - OpenSearch metrics live under the legacy `AWS/ES` namespace.
 - ALB/NLB metrics are per-load-balancer and per-target-group; both dimension
   sets are discovered automatically.
+
+## Contributing
+
+Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for how to
+build, test, and open a pull request. Please report security vulnerabilities
+privately per [SECURITY.md](SECURITY.md), not via public issues.
+
+## License
+
+frugal is licensed under the **GNU Affero General Public License v3.0**
+(AGPL-3.0). Copyright © 2026 tools-plus. See [LICENSE](LICENSE) for the full
+text.
