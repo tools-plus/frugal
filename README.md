@@ -124,6 +124,28 @@ The only possible cost is ordinary **network egress**, and only if the agent and
 server sit in different AZs / regions or talk over the internet; same-region,
 in-VPC traffic to your own server is free.
 
+### Keeping the CloudWatch bill down
+
+`GetMetricData` is billed **per metric requested per poll** (~$0.01/1,000), so
+cost = *metrics × polls*. frugal gives you these levers in **Admin ▸ Settings**:
+
+- **Cost mode presets** — one click sets the poll interval + period:
+  *frugal* (10-min poll, 5-min resolution — matches free basic monitoring),
+  *balanced* (5-min, the default), *detailed* (1-min). Because a single call
+  returns every datapoint in its window for one charge, a longer poll interval
+  cuts cost **without losing resolution** — only freshness.
+- **Live cost estimate** — the AWS section shows the estimated monthly CloudWatch
+  spend for your current interval and discovered metric count, updating as you
+  change the interval.
+- **Native supersedes CloudWatch** — an opt-in toggle that drops the paid
+  namespaces a native poller already covers for free (ElastiCache/OpenSearch/
+  AmazonMQ), so you don't pay to collect the same metrics twice. Enable it only
+  once the native pollers are healthy — there's no CloudWatch fallback for a
+  superseded namespace.
+- **Daily metrics are auto-throttled** — S3 storage metrics (which AWS publishes
+  once a day) are fetched hourly rather than every poll, so they cost a fraction
+  of what a normal-cadence poll would.
+
 ## Configuration: bootstrap vs runtime
 
 **Bootstrap** — the few things needed before the server can start and find its

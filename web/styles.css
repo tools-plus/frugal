@@ -281,6 +281,13 @@ header h1 span { color: var(--muted); font-weight: 400; }
 #settings .sadd, #settings .sclrkeys, #settings .sgen { background: var(--panel); border: 1px solid var(--line); color: var(--muted);
   border-radius: 6px; padding: 5px 10px; font: 11px var(--mono); cursor: pointer; }
 #settings .sadd:hover, #settings .sclrkeys:hover, #settings .sgen:hover { color: var(--text); border-color: var(--muted); }
+#settings .spreset { background: var(--panel); border: 1px solid var(--line); color: var(--muted);
+  border-radius: 6px; padding: 4px 10px; font: 11px var(--mono); cursor: pointer; margin-right: 6px; }
+#settings .spreset:hover { color: var(--text); border-color: var(--muted); }
+#settings .spreset.on { color: var(--accent); border-color: var(--accent); }
+#settings .scost { font: 12px var(--mono); color: var(--accent); margin: 6px 0 2px; }
+#settings .scost b { color: var(--text); }
+#settings .scost .smuted { color: var(--muted); }
 #settings .sactions { display: flex; gap: 8px; justify-content: flex-end; padding-top: 12px; }
 #settings .sactions button { background: var(--panel-2); border: 1px solid var(--line); color: var(--muted);
   border-radius: 6px; padding: 7px 14px; font: 12px var(--mono); cursor: pointer; }

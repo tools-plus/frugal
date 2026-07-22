@@ -18,6 +18,22 @@ const AWS_NAMESPACES = [
   ["AWS/NetworkELB", "NLB"], ["AWS/EKS", "EKS control plane"], ["ContainerInsights", "Container Insights"],
 ];
 
+// Poll/period presets, cheapest first. Frugal uses a 10-min poll at 5-min
+// resolution (matches free basic monitoring); detailed is 1-min everything.
+const MODES = {
+  frugal: { poll: 600, period: 300 },
+  balanced: { poll: 300, period: 60 },
+  detailed: { poll: 60, period: 60 },
+};
+
+// CloudWatch GetMetricData price: $0.01 per 1,000 metrics requested.
+const USD_PER_READ = 0.01 / 1000;
+const SEC_PER_MONTH = 30 * 24 * 3600;
+const DAILY_POLL_SEC = 3600; // daily-resolution targets are fetched hourly
+
+// Billable CloudWatch target counts from /api/status, for the live estimate.
+let cwRegular = 0, cwDaily = 0, cwCountKnown = false;
+
 function h(html) { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstChild; }
 function val(id) { return (root.querySelector("#" + id) || {}).value ?? ""; }
 function num(id) { const n = parseInt(val(id), 10); return isNaN(n) ? 0 : n; }
@@ -51,6 +67,17 @@ export async function openSettings() {
   document.addEventListener("keydown", onKey);
   let data = {};
   try { data = await fetch("/api/settings").then(r => r.json()); } catch { err("could not load settings"); return; }
+  // Pull current billable target counts so the cost estimate reflects reality.
+  cwCountKnown = false;
+  try {
+    const st = await fetch("/api/status").then(r => r.json());
+    const a = (st && st.aws) || {};
+    if (a.cw_targets_regular != null) {
+      cwRegular = a.cw_targets_regular | 0;
+      cwDaily = a.cw_targets_daily | 0;
+      cwCountKnown = true;
+    }
+  } catch { /* estimate falls back to a note */ }
   render(data);
 }
 
@@ -91,9 +118,17 @@ function render(data) {
     fieldRow("secret access key", `<input id="awsSK" type="password" placeholder="${data.aws_keys_set ? KEEP : "blank = use IRSA/env"}">`) +
     fieldRow("session token", `<input id="awsST" type="password" placeholder="${KEEP}">`) +
     fieldRow("services", `<div class="snsgrid" id="awsNsGrid"></div>`) +
+    fieldRow("cost mode",
+      `<span><button type="button" class="spreset" data-mode="frugal">frugal · 10m</button>` +
+      `<button type="button" class="spreset" data-mode="balanced">balanced · 5m</button>` +
+      `<button type="button" class="spreset" data-mode="detailed">detailed · 1m</button></span>`) +
     fieldRow("poll interval (s)", `<input id="awsPoll" type="number" value="${aws.poll_interval_seconds || 300}">`) +
     fieldRow("discovery interval (min)", `<input id="awsDisc" type="number" value="${aws.discovery_interval_minutes || 10}">`) +
-    fieldRow("period (s)", `<input id="awsPeriod" type="number" value="${aws.period_seconds || 60}">`));
+    fieldRow("period (s)", `<input id="awsPeriod" type="number" value="${aws.period_seconds || 60}">`) +
+    fieldRow("native supersedes CloudWatch",
+      `<input type="checkbox" id="awsSupersede" ${aws.native_supersedes_cloudwatch ? "checked" : ""}>` +
+      `<span class="scbx" title="Drop the paid CloudWatch namespaces (ElastiCache/OpenSearch/AmazonMQ) that a native poller already covers for free. Enable only when native pollers are healthy.">stop paying for what native covers</span>`) +
+    `<div class="scost" id="awsCost"></div>`);
   if (data.aws_keys_set) {
     const clr = h('<button type="button" class="sclrkeys">clear keys (use IRSA/env)</button>');
     clr.onclick = () => { clearAWSKeys = true; clr.textContent = "keys will be cleared on save"; clr.disabled = true; };
@@ -108,6 +143,14 @@ function render(data) {
     const cb = h(`<label class="scbx"><input type="checkbox" value="${ns}" ${selected.includes(ns) ? "checked" : ""}> ${label}</label>`);
     nsGrid.appendChild(cb);
   }
+  // Cost-mode presets + live monthly-cost estimate.
+  awsSec.querySelectorAll(".spreset").forEach(b => { b.onclick = () => setMode(b.dataset.mode); });
+  ["awsPoll", "awsPeriod"].forEach(id => {
+    const el = awsSec.querySelector("#" + id);
+    if (el) el.addEventListener("input", () => { markMode(); updateCost(); });
+  });
+  markMode();
+  updateCost();
 
   // ---- Kubernetes ----
   const k = c.kubernetes || {};
@@ -148,6 +191,42 @@ function render(data) {
   gen.onclick = () => { root.querySelector("#ingTok").type = "text"; root.querySelector("#ingTok").value = randToken(); };
   rSec.appendChild(gen);
   body.appendChild(rSec);
+}
+
+// Apply a cost-mode preset to the poll/period fields.
+function setMode(mode) {
+  const m = MODES[mode];
+  if (!m) return;
+  const poll = root.querySelector("#awsPoll"), period = root.querySelector("#awsPeriod");
+  if (poll) poll.value = m.poll;
+  if (period) period.value = m.period;
+  markMode();
+  updateCost();
+}
+
+// Highlight the preset button matching the current poll/period, if any.
+function markMode() {
+  const poll = num("awsPoll"), period = num("awsPeriod");
+  root.querySelectorAll(".spreset").forEach(b => {
+    const m = MODES[b.dataset.mode];
+    b.classList.toggle("on", !!m && m.poll === poll && m.period === period);
+  });
+}
+
+// Recompute the estimated monthly CloudWatch cost from the current poll
+// interval and the billable target counts reported by /api/status.
+function updateCost() {
+  const el = root.querySelector("#awsCost");
+  if (!el) return;
+  if (!cwCountKnown) {
+    el.innerHTML = `<span class="smuted">cost estimate appears once the collector has discovered metrics</span>`;
+    return;
+  }
+  const poll = Math.max(num("awsPoll") || 300, 1);
+  const reads = cwRegular * SEC_PER_MONTH / poll + cwDaily * SEC_PER_MONTH / DAILY_POLL_SEC;
+  const usd = reads * USD_PER_READ;
+  const n = cwRegular + cwDaily;
+  el.innerHTML = `≈ <b>$${usd.toFixed(2)}/mo</b> CloudWatch <span class="smuted">(${n} billable metric${n === 1 ? "" : "s"} at this interval)</span>`;
 }
 
 function mkInput(k, v) { const i = h(`<input placeholder="${k}" value="${(v ?? "").toString().replace(/"/g, "&quot;")}">`); i.dataset.k = k; return i; }
@@ -202,6 +281,7 @@ function collect() {
         namespaces: [...root.querySelectorAll("#awsNsGrid input:checked")].map(c => c.value),
         poll_interval_seconds: num("awsPoll"),
         discovery_interval_minutes: num("awsDisc"), period_seconds: num("awsPeriod"),
+        native_supersedes_cloudwatch: checked("awsSupersede"),
       },
       kubernetes: {
         enabled: checked("k8sEnabled"), poll_interval_seconds: num("k8sPoll"),
