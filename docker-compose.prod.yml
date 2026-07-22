@@ -1,6 +1,6 @@
 # frugal server via the prebuilt GHCR image (no local build).
 #
-#   AWSOBS_SECRET_KEY=$(openssl rand -hex 32) \
+#   FRUGAL_SECRET_KEY=$(openssl rand -hex 32) \
 #     docker compose -f docker-compose.prod.yml up -d
 #
 # Then open http://localhost:8080 and log in as admin/admin. Configure what to
