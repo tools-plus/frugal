@@ -137,11 +137,12 @@ function tickFmt(vals) {
 }
 function dragZoom(u) {
   if (!z) return;
-  const sel = u.select;
+  // Read before clearing — u.setSelect mutates u.select in place.
+  const left = u.select.left, width = u.select.width;
   u.setSelect({ left: 0, top: 0, width: 0, height: 0 }, false);
-  if (sel.width <= 8) return;
-  const min = u.posToVal(sel.left, "x");
-  const max = u.posToVal(sel.left + sel.width, "x");
+  if (width <= 8) return;
+  const min = u.posToVal(left, "x");
+  const max = u.posToVal(left + width, "x");
   if (max - min < 1) return;
   z.zoom = { min, max };
   u.setScale("x", { min, max });

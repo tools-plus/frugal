@@ -194,11 +194,13 @@ function xTickFmt(chart, vals) {
   });
 }
 function onDragZoom(chart, u) {
-  const sel = u.select;
+  // Read the selection BEFORE clearing — u.setSelect mutates u.select in place,
+  // so reading .width after clearing yields 0 and the drag never zooms.
+  const left = u.select.left, width = u.select.width;
   u.setSelect({left: 0, top: 0, width: 0, height: 0}, false); // clear the gray box
-  if (sel.width <= 8) return;                                  // ignore clicks / tiny drags
-  const min = u.posToVal(sel.left, "x");
-  const max = u.posToVal(sel.left + sel.width, "x");
+  if (width <= 8) return;                                      // ignore clicks / tiny drags
+  const min = u.posToVal(left, "x");
+  const max = u.posToVal(left + width, "x");
   if (max - min < 1) return;
   chart.zoom = {min, max};
   u.setScale("x", {min, max});
