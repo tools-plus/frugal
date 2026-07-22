@@ -1,0 +1,28 @@
+# frugal server via the prebuilt GHCR image (no local build).
+#
+#   AWSOBS_SECRET_KEY=$(openssl rand -hex 32) \
+#     docker compose -f docker-compose.prod.yml up -d
+#
+# Then open http://localhost:8080 and log in as admin/admin. Configure what to
+# collect under Admin ▸ Settings — nothing service-specific lives here.
+services:
+  frugal:
+    image: ghcr.io/tools-plus/frugal:latest
+    pull_policy: always
+    ports:
+      - "8080:8080"
+    environment:
+      # Master key that encrypts stored credentials. Set it in your shell (or an
+      # .env file); never commit a real value.
+      FRUGAL_SECRET_KEY: "${FRUGAL_SECRET_KEY:?set FRUGAL_SECRET_KEY, e.g. export FRUGAL_SECRET_KEY=$(openssl rand -hex 32)}"
+      FRUGAL_DATA_DIR: "/data"
+      FRUGAL_LISTEN: ":8080"
+    volumes:
+      - frugal-data:/data
+      # Optional: use a local AWS profile instead of entering keys in the UI.
+      # Prefer IRSA / an instance role in real production.
+      # - "${HOME}/.aws:/home/nonroot/.aws:ro"
+    restart: unless-stopped
+
+volumes:
+  frugal-data:

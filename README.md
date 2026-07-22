@@ -24,6 +24,32 @@ EKS APIs ───────────┤     (Go)          (+ optional SQLi
 Agent push (/proc) ─┘
 ```
 
+## Quick start
+
+Run the prebuilt multi-arch image from GHCR — no build, no Go toolchain:
+
+```bash
+# Docker
+docker run -d --name frugal -p 8080:8080 \
+  -e FRUGAL_SECRET_KEY=$(openssl rand -hex 32) \
+  -e FRUGAL_DATA_DIR=/data \
+  -v frugal-data:/data \
+  ghcr.io/tools-plus/frugal:latest
+
+# …or Docker Compose (uses the same GHCR image)
+FRUGAL_SECRET_KEY=$(openssl rand -hex 32) \
+  docker compose -f docker-compose.prod.yml up -d
+```
+
+Then open **http://localhost:8080**, log in as **admin / admin**, set a new
+password, and configure what to collect under **Admin ▸ Settings**.
+
+- Images are published for **amd64 + arm64**; pin a release with `:vX.Y.Z`
+  instead of `:latest`.
+- `FRUGAL_SECRET_KEY` encrypts stored credentials — keep it stable across
+  restarts (a changed key can't decrypt existing secrets).
+- To build from source instead, see the [Developer view](#developer-view).
+
 ## Architecture: two parts, one binary
 
 In `server` mode the process runs as two parts:
@@ -148,13 +174,18 @@ works, but credentials can't be stored or used until you set one.
 
 **In an EKS cluster (recommended):**
 
+`deploy/k8s.yaml` already points at the public image
+`ghcr.io/tools-plus/frugal:latest`, so there's nothing to build:
+
 ```bash
-docker build -t YOUR_ECR_REPO/frugal:latest . && docker push YOUR_ECR_REPO/frugal:latest
-# edit deploy/k8s.yaml: set the image, the IRSA role ARN (annotation on the
-# ServiceAccount), and FRUGAL_SECRET_KEY (as a Secret env var).
+# edit deploy/k8s.yaml: set the IRSA role ARN (annotation on the ServiceAccount)
+# and, for persistence, a volume for data_dir. Pin :vX.Y.Z if you prefer.
 kubectl apply -f deploy/k8s.yaml
 kubectl -n frugal port-forward svc/frugal 8080:80
 ```
+
+To ship your own build instead, `docker build -t <your-registry>/frugal:tag .`,
+push it, and set that image in `deploy/k8s.yaml`.
 
 - **IRSA** gives the pod CloudWatch access with no long-lived keys — leave AWS
   keys blank in Settings and the default credential chain is used. The IAM

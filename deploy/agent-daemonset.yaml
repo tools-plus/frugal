@@ -24,7 +24,7 @@ spec:
         - operator: Exists   # run on every node, including tainted ones
       containers:
         - name: agent
-          image: YOUR_ECR_REPO/frugal:latest
+          image: ghcr.io/tools-plus/frugal:latest
           args: ["agent"]
           env:
             - name: FRUGAL_SERVER_URL

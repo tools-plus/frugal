@@ -58,7 +58,7 @@ spec:
       serviceAccountName: frugal
       containers:
         - name: frugal
-          image: YOUR_ECR_REPO/frugal:latest
+          image: ghcr.io/tools-plus/frugal:latest
           args: ["-config", "/etc/frugal/config.json"]
           env:
             - name: AWS_REGION
