@@ -1,0 +1,152 @@
+name: release
+
+# On a published GitHub release:
+#   1. build the frugal binary (linux amd64 + arm64) and attach it as release assets
+#   2. build the multi-arch Docker image and push it to GHCR
+#
+# The binary needs CGO_ENABLED=1 (the sqlite driver for server persistence), so
+# each target is built on its own native runner instead of cross-compiling.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write # upload release assets
+  packages: write # push to GHCR
+
+env:
+  IMAGE: ghcr.io/tools-plus/frugal
+
+jobs:
+  # --------------------------------------------------------------- binaries
+  binaries:
+    name: binary (linux/${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build (CGO on for the sqlite driver)
+        env:
+          CGO_ENABLED: "1"
+          GOOS: linux
+          GOARCH: ${{ matrix.arch }}
+        run: |
+          out="frugal-linux-${{ matrix.arch }}"
+          go build -trimpath -ldflags="-s -w" -o "$out" ./cmd/frugal
+          sha256sum "$out" > "$out.sha256"
+
+      - name: Attach to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" \
+            "frugal-linux-${{ matrix.arch }}" \
+            "frugal-linux-${{ matrix.arch }}.sha256" \
+            --clobber
+
+  # ----------------------------------------------------------- docker (build)
+  # Build each arch on its native runner and push by digest (no tag yet); the
+  # merge job stitches them into one multi-arch manifest. Avoids slow QEMU
+  # emulation for the CGO build.
+  docker-build:
+    name: image (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            platform: linux/amd64
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            platform: linux/arm64
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # ----------------------------------------------------------- docker (merge)
+  docker-merge:
+    name: image (manifest)
+    needs: docker-build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download digests
+        uses: actions/download-artifact@v4
+        with:
+          path: /tmp/digests
+          pattern: digest-*
+          merge-multiple: true
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=raw,value=${{ github.event.release.tag_name }}
+            type=raw,value=latest,enable=${{ !github.event.release.prerelease }}
+
+      - name: Create and push manifest list
+        working-directory: /tmp/digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf '${{ env.IMAGE }}@sha256:%s ' *)
+
+      - name: Inspect
+        run: |
+          docker buildx imagetools inspect \
+            "${{ env.IMAGE }}:${{ github.event.release.tag_name }}"
