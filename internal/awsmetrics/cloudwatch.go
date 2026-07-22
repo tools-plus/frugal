@@ -478,6 +478,16 @@ func (c *Collector) poll(ctx context.Context) {
 	if period < 60 {
 		period = 60
 	}
+	// The fetch window must cover the gap between polls, or datapoints published
+	// between two polls are never read. A 5×period trailing window is plenty at
+	// the default cadence; when the poll interval is widened (e.g. to cut cost),
+	// grow the window to the interval plus one period of slack. GetMetricData is
+	// billed per metric requested, not per datapoint, so a wider window costs
+	// nothing extra — it just returns more points per call.
+	window := 5 * period
+	if pi := int32(c.cfg.PollIntervalSeconds); pi+period > window {
+		window = pi + period
+	}
 	end := time.Now()
 	c.stMu.Lock()
 	c.lastPoll = end
@@ -494,7 +504,7 @@ func (c *Collector) poll(ctx context.Context) {
 			regular = append(regular, t)
 		}
 	}
-	c.fetch(ctx, regular, end.Add(-5*time.Duration(period)*time.Second), end, period)
+	c.fetch(ctx, regular, end.Add(-time.Duration(window)*time.Second), end, period)
 	c.fetch(ctx, daily, end.Add(-50*time.Hour), end, 86400)
 }
 
