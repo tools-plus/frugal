@@ -21,10 +21,10 @@ import (
 	"github.com/tools-plus/frugal/internal/awsmetrics"
 	"github.com/tools-plus/frugal/internal/config"
 	"github.com/tools-plus/frugal/internal/ekstoken"
-	"github.com/tools-plus/frugal/internal/piwatch"
 	"github.com/tools-plus/frugal/internal/k8s"
 	"github.com/tools-plus/frugal/internal/logstore"
 	"github.com/tools-plus/frugal/internal/native"
+	"github.com/tools-plus/frugal/internal/piwatch"
 	"github.com/tools-plus/frugal/internal/store"
 )
 

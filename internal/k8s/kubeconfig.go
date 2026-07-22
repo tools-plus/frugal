@@ -79,10 +79,10 @@ func ParseKubeconfig(data []byte) ([]KubeCluster, error) {
 		}{c.Cluster.Server, ca}
 	}
 	type userAuth struct {
-		token          string
-		cert, key      []byte
-		eksCluster     string
-		region         string
+		token      string
+		cert, key  []byte
+		eksCluster string
+		region     string
 	}
 	users := map[string]userAuth{}
 	for _, u := range kc.Users {

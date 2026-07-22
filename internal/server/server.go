@@ -96,7 +96,7 @@ type Server struct {
 	getStatus   func() map[string]any
 	ingestToken func() string
 	authn       Authenticator // always non-nil (control store)
-	authEnabled bool           // whether the login is enforced
+	authEnabled bool          // whether the login is enforced
 	getConfig   func() (config.Runtime, error)
 	saveConfig  func(config.Runtime) error
 	hasKey      func() bool

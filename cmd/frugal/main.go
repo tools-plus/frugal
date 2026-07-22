@@ -177,15 +177,15 @@ func runServer(ctx context.Context, cfg config.Config, logger *log.Logger) {
 				}
 				return nil
 			},
-			Status:      sup.Status,
-			IngestToken: func() string { tokMu.RLock(); defer tokMu.RUnlock(); return ingestTok },
-			Authn:       ctrl,
-			AuthEnabled: authEnabled,
-			GetConfig:   func() (config.Runtime, error) { r, _, e := ctrl.GetConfig(); return r, e },
-			SaveConfig:  saveConfig,
+			Status:       sup.Status,
+			IngestToken:  func() string { tokMu.RLock(); defer tokMu.RUnlock(); return ingestTok },
+			Authn:        ctrl,
+			AuthEnabled:  authEnabled,
+			GetConfig:    func() (config.Runtime, error) { r, _, e := ctrl.GetConfig(); return r, e },
+			SaveConfig:   saveConfig,
 			HasSecretKey: ctrl.HasSecretKey,
-			Assets:      web.FS,
-			Logger:      logger,
+			Assets:       web.FS,
+			Logger:       logger,
 		}),
 	}
 	go func() {
